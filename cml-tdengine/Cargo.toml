@@ -1,0 +1,27 @@
+[package]
+name = "cml-tdengine"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+cml-core = { path = "../cml-core" }
+
+taos = { version = "*", default-features = false, features = ["native"] }
+taos-sys = { version = "*" }
+taos-query = { version = "*" }
+anyhow = { workspace = true }
+rand = { workspace = true }
+dashmap = { workspace = true }
+derive_builder = { workspace = true }
+deadpool = { workspace = true }
+serde = { workspace = true }
+chrono = { workspace = true }
+rayon = "1.7.0"
+tokio = { version = "1.29.1", features = ["rt", "macros"] }
+
+[dev-dependencies]
+burn = { workspace = true }
+burn-autodiff = { git = "https://github.com/burn-rs/burn.git", branch = "main" }
+burn-ndarray = { git = "https://github.com/burn-rs/burn.git", branch = "main" }
