@@ -76,7 +76,7 @@ impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengi
         for data in &train_data {
             let mut values = vec![
                 ColumnView::from_nanos_timestamp(vec![current_ts]),
-                ColumnView::from_bools(vec![rng.gen::<f32>() > 0.2]),
+                ColumnView::from_bools(vec![rng.gen::<f32>() >= 0.2]),
                 ColumnView::from_nchar(vec![data.data_path().as_path().to_str().unwrap()]),
                 ColumnView::from(data.gt().clone()),
             ];
