@@ -17,7 +17,7 @@ Domain-specific problem are widely prevalent in real-world scenarios.
 
 <img src="assets/domain-specific.png" width="518px"/>
 
-To address this problem,
+To address this problem:
 
 <table>
     <thead>
