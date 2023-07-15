@@ -14,11 +14,8 @@ pub struct MetaData<F> {
 impl<F> MetaData<F> {
     pub fn get_placeholders(&self) -> (String, String) {
         (
-            vec![
-                "?";
-                self.optional_tags.as_ref().map_or(0, |v| v.len()) + self.inherent_tag_num
-            ]
-            .join(", "),
+            vec!["?"; self.optional_tags.as_ref().map_or(0, |v| v.len()) + self.inherent_tag_num]
+                .join(", "),
             vec!["?"; self.optional_field_num + self.inherent_field_num].join(", "),
         )
     }

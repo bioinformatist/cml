@@ -17,7 +17,7 @@ impl<'a> STable<'a> {
 fn field_to_stmt(fields: &[Field]) -> String {
     fields
         .iter()
-        .map(|f| format!("{}", f.sql_repr()))
+        .map(|f| f.sql_repr().to_string())
         .collect::<Vec<String>>()
         .join(",")
 }

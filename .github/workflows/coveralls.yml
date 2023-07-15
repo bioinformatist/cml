@@ -1,0 +1,47 @@
+name: Coveralls
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    
+    services:
+      tdengine:
+        image: tdengine/tdengine:3.0.7.1
+        ports:
+          - 6030:6030
+    
+    steps:
+      - uses: actions/checkout@v3
+  
+      - name: Install taosc
+        run: |
+          curl -sO https://www.taosdata.com/assets-download/3.0/TDengine-client-3.0.7.1-Linux-x64-Lite.tar.gz
+          tar zxf TDengine-client-3.0.7.1-Linux-x64-Lite.tar.gz
+          cd TDengine-client-3.0.7.1
+          ./install_client.sh
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+        
+      - name: Check format
+        run: cargo fmt --check --all
+        
+      - name: Check clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+        
+      - name: Install Cargo B(inary)Install
+        run: curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+      
+      - uses: taiki-e/install-action@cargo-tarpaulin
+      
+      - name: Coverage
+        run: cargo +nightly tarpaulin --follow-exec --post-test-delay 10 --coveralls ${{ secrets.COVERALLS_REPO_TOKEN }} -- --test-threads=1
