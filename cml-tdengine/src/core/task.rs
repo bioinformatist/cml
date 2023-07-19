@@ -458,7 +458,7 @@ mod tests {
             let config_optimizer =
                 AdamConfig::new().with_weight_decay(Some(WeightDecayConfig::new(5e-5)));
 
-            let working_dir = "/tmp/work_dir".into();
+            let working_dir = "/tmp/work_dir";
             let learner = LearnerBuilder::new(working_dir)
                 .with_file_checkpointer(1, CompactRecorder::new())
                 .devices(vec![device])
