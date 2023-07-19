@@ -270,11 +270,12 @@ mod tests {
         })
         .await?;
 
-        let mut result = taos
-            .query("SELECT output FROM inference.inference")
-            .await?;
+        let mut result = taos.query("SELECT output FROM inference.inference").await?;
         let records = result.to_records().await?;
-        assert_eq!(vec![vec![Value::Float(9.8)],vec![Value::Float(10.8)]], records);
+        assert_eq!(
+            vec![vec![Value::Float(9.8)], vec![Value::Float(10.8)]],
+            records
+        );
 
         fs::remove_dir_all("/tmp/inference_dir/")?;
         taos.exec("DROP DATABASE IF EXISTS inference").await?;
