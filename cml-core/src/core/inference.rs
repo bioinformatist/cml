@@ -2,7 +2,7 @@ use crate::metadata::MetaData;
 use anyhow::Result;
 use deadpool::managed::{Manager, Pool};
 use derive_getters::Getters;
-use std::{future::Future, path::PathBuf};
+use std::path::PathBuf;
 
 #[derive(Builder, Getters)]
 pub struct NewSample<F> {
@@ -15,7 +15,7 @@ pub struct NewSample<F> {
     optional_tags: Option<Vec<F>>,
 }
 
-pub trait Inference<M, F, C: Manager> {
+pub trait Inference<M, F, T, C: Manager> {
     async fn init_inference(
         &self,
         target_type: M,
@@ -23,7 +23,7 @@ pub trait Inference<M, F, C: Manager> {
         optional_tags: Option<Vec<M>>,
     ) -> Result<()>;
 
-    async fn inference<FN, R>(
+    async fn inference<FN>(
         &self,
         metadata: MetaData<F>,
         target_type: M,
@@ -32,6 +32,5 @@ pub trait Inference<M, F, C: Manager> {
         inference_fn: FN,
     ) -> Result<()>
     where
-        FN: FnOnce(&mut Vec<NewSample<F>>, &Pool<C>) -> R,
-        R: Future<Output = Result<Vec<NewSample<F>>>>;
+        FN: FnOnce(&mut Vec<NewSample<F>>, &str, T) -> Vec<NewSample<F>>;
 }

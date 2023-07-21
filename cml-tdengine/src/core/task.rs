@@ -96,7 +96,7 @@ impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
         }
 
         if !timeout_clause.is_empty() {
-            taos.exec("INSERT INTO".to_owned() + &timeout_clause.join(" "))?;
+            taos.exec("INSERT INTO ".to_owned() + &timeout_clause.join(" "))?;
         }
         batch_info.retain(|b| !batch_with_task.contains(&b.batch));
 
@@ -224,8 +224,6 @@ mod tests {
         let config: TaskConfig = TaskConfigBuilder::default()
             .min_start_count(1)
             .min_update_count(1)
-            .work_dir("/tmp/work_dir".into())
-            .local_dir(Some("/tmp/local_dir".into()))
             .working_status(vec!["TRAIN".to_string(), "EVAL".to_string()])
             .limit_time(Duration::days(2))
             .build()?;
@@ -261,8 +259,28 @@ mod tests {
             VALUES (NOW, 'true', '/tmp/file_1.txt', 1.0),
             (NOW + 1s, 'false', '/tmp/file_2.txt', 2.0)",
         )?;
+        taos.exec(
+            "INSERT INTO task.`FUCK`
+            USING task.task
+            TAGS ('2022-08-08 18:18:18.518')
+            VALUES (NOW -3d, 'TRAIN')",
+        )?;
 
-        let build_fn = |c: &TaskConfig, b: &str| -> Result<()> {
+        taos.exec(
+            "INSERT INTO training_data.`FUCK8`
+            USING training_data.training_data
+            TAGS (null)
+            VALUES (NOW, 'true', '/tmp/file_1.txt', 1.0),
+            (NOW + 1s, 'false', '/tmp/file_2.txt', 2.0)",
+        )?;
+        taos.exec(
+            "INSERT INTO task.`FUCK8`
+            USING task.task
+            TAGS (null)
+            VALUES (NOW -3d, 'TRAIN')",
+        )?;
+
+        let build_fn = |_c: &TaskConfig, b: &str| -> Result<()> {
             type B = ADBackendDecorator<NdArrayBackend<f32>>;
             B::seed(220225);
 
@@ -440,8 +458,7 @@ mod tests {
             let config_optimizer =
                 AdamConfig::new().with_weight_decay(Some(WeightDecayConfig::new(5e-5)));
 
-            let working_dir = c.work_dir().to_str().unwrap();
-
+            let working_dir = "/tmp/work_dir";
             let learner = LearnerBuilder::new(working_dir)
                 .with_file_checkpointer(1, CompactRecorder::new())
                 .devices(vec![device])
