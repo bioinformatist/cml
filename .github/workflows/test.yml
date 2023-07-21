@@ -1,0 +1,64 @@
+name: Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    
+jobs:
+  get-taos-version:
+    runs-on: ubuntu-latest
+    
+    outputs:
+      taos-version: ${{ steps.gettaosversion.outputs.version }}
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Get taos version
+        id: gettaosversion
+        run: echo "version=$(cat TAOSVERSION)" >> $GITHUB_OUTPUT
+  
+  tests:
+    needs: get-taos-version
+    runs-on: ubuntu-latest
+    
+    services:
+      tdengine:
+        image: tdengine/tdengine:${{ needs.get-taos-version.outputs.taos-version }}
+        ports:
+          - 6030:6030
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Cache taosc
+        id: cache-taosc
+        uses: actions/cache@v3
+        with:
+          key: taosc-${{ needs.get-taos-version.outputs.taos-version }}
+          path: TDengine-client-${{ needs.get-taos-version.outputs.taos-version }}
+    
+      - if: ${{ steps.cache-taosc.outputs.cache-hit != 'true' }}
+        name: Get taosc
+        run: |
+          curl -sO https://www.taosdata.com/assets-download/3.0/TDengine-client-${{ needs.get-taos-version.outputs.taos-version }}-Linux-x64-Lite.tar.gz
+          tar zxf TDengine-client-${{ needs.get-taos-version.outputs.taos-version }}-Linux-x64-Lite.tar.gz
+      
+      - name: Install taosc
+        run: |
+          cd TDengine-client-${{ needs.get-taos-version.outputs.taos-version}}
+          ./install_client.sh
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+          
+      - name: Check format
+        run: cargo fmt --check --all
+        
+      - name: Check clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+        
+      - name: Test
+        run: cargo test -- --test-threads=1

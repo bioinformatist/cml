@@ -462,6 +462,9 @@ mod tests {
 
         cml.run(config, build_fn, build_fn)?;
 
+        taos.exec("DROP DATABASE IF EXISTS training_data")?;
+        taos.exec("DROP DATABASE IF EXISTS task")?;
+
         Ok(())
     }
 }
