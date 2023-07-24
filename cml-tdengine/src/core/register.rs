@@ -250,11 +250,11 @@ mod tests {
         })
         .await?;
 
-        let mut result = taos
-            .query("SELECT COUNT(*) FROM training_data.training_data")
-            .await?;
-        let records = result.to_records().await?;
-        assert_eq!(vec![vec![Value::BigInt(4)]], records);
+        let records = taos
+            .query_one("SELECT COUNT(*) FROM training_data.training_data")
+            .await?
+            .unwrap_or(0);
+        assert_eq!(4, records);
 
         taos.exec("DROP DATABASE IF EXISTS training_data").await?;
         Ok(())

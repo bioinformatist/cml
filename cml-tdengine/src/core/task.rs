@@ -106,30 +106,26 @@ impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
         for batch in batch_info {
             match batch.model_update_time {
                 Some(model_update_time) => {
-                    if let Value::BigInt(count) = taos
-                        .query(format!(
+                    let count = taos
+                        .query_one(format!(
                             "SELECT COUNT(*) FROM training_data.`{}` WHERE ts > {}",
                             batch.batch,
                             model_update_time.timestamp_nanos()
                         ))?
-                        .to_rows_vec()?[0][0]
-                    {
-                        if count as usize > *task_config.min_update_count() {
-                            scratch_in_queue.push(batch.batch);
-                        }
+                        .unwrap_or(0);
+                    if count as usize > *task_config.min_update_count() {
+                        scratch_in_queue.push(batch.batch);
                     }
                 }
                 None => {
-                    if let Value::BigInt(count) = taos
-                        .query(format!(
+                    let count = taos
+                        .query_one(format!(
                             "SELECT COUNT(*) FROM training_data.`{}`",
                             batch.batch
                         ))?
-                        .to_rows_vec()?[0][0]
-                    {
-                        if count as usize > *task_config.min_start_count() {
-                            fining_in_queue.push(batch.batch);
-                        }
+                        .unwrap_or(0);
+                    if count as usize > *task_config.min_start_count() {
+                        fining_in_queue.push(batch.batch);
                     }
                 }
             }
