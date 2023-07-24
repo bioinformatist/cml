@@ -41,6 +41,7 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
         &self,
         metadata: MetaData<Value>,
         target_type: Field,
+        available_status: Vec<&str>,
         data: &mut Vec<NewSample<Value>>,
         pool: &Pool<TaosBuilder>,
         inference_fn: FN,
@@ -51,8 +52,22 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
         let taos = pool.get().await?;
         let mut stmt = Stmt::init(&taos)?;
         taos.use_database("task").await?;
+        let status_str = available_status
+            .into_iter()
+            .map(|c| {
+                let mut s = "'".to_string();
+                s.push_str(c);
+                s.push('\'');
+                s
+            })
+            .collect::<Vec<String>>()
+            .join(",");
         let last_task_time = taos
-            .query_one(format!("SELECT LAST(ts) FROM task.`{}`", metadata.batch()))
+            .query_one(format!(
+                "SELECT LAST(ts) FROM task.`{}` where status in ({})",
+                metadata.batch(),
+                status_str
+            ))
             .await?
             .unwrap_or(0);
         let samples_with_res = inference_fn(data, metadata.batch(), last_task_time);
@@ -181,8 +196,15 @@ mod tests {
         taos.exec(
             "INSERT INTO task.`FUCK`
             USING task.task
-            TAGS ('2022-08-08 18:18:18.518')
+            TAGS ('2022-08-09 18:18:18.518')
             VALUES (NOW, 'TRAIN')",
+        )
+        .await?;
+        taos.exec(
+            "INSERT INTO task.`FUCK`
+            USING task.task
+            TAGS ('2022-08-08 18:18:18.518')
+            VALUES (NOW, 'SUCCESS')",
         )
         .await?;
 
@@ -211,10 +233,23 @@ mod tests {
                 .build()?,
         ];
 
+        let available_status = vec!["SUCCESS"];
+        let status_str = available_status
+            .clone()
+            .into_iter()
+            .map(|c| {
+                let mut s = "'".to_string();
+                s.push_str(c);
+                s.push('\'');
+                s
+            })
+            .collect::<Vec<String>>()
+            .join(",");
         let last_batch_time: i64 = taos
             .query_one(format!(
-                "SELECT LAST(ts) FROM task.`{}`",
-                batch_meta_1.batch()
+                "SELECT LAST(ts) FROM task.`{}` where status IN ({}) ",
+                batch_meta_1.batch(),
+                status_str
             ))
             .await?
             .unwrap_or(0);
@@ -260,6 +295,7 @@ mod tests {
                 cml.inference(
                     batch_meta_1,
                     Field::new("output", Ty::Float, 8),
+                    available_status,
                     &mut batch_data_1,
                     &pool,
                     inference_fn,
