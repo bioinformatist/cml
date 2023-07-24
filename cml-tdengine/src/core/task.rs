@@ -220,7 +220,7 @@ mod tests {
         let config: TaskConfig = TaskConfigBuilder::default()
             .min_start_count(1)
             .min_update_count(1)
-            .working_status(vec!["TRAIN".to_string(), "EVAL".to_string()])
+            .working_status(vec!["TRAIN", "EVAL"])
             .limit_time(Duration::days(2))
             .build()?;
 

@@ -52,21 +52,15 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
         let taos = pool.get().await?;
         let mut stmt = Stmt::init(&taos)?;
         taos.use_database("task").await?;
-        let status_str = available_status
-            .into_iter()
-            .map(|c| {
-                let mut s = "'".to_string();
-                s.push_str(c);
-                s.push('\'');
-                s
-            })
-            .collect::<Vec<String>>()
-            .join(",");
         let last_task_time = taos
             .query_one(format!(
                 "SELECT LAST(ts) FROM task.`{}` where status in ({})",
                 metadata.batch(),
-                status_str
+                available_status
+                    .iter()
+                    .map(|s| format!("'{}'", s))
+                    .collect::<Vec<String>>()
+                    .join(", ")
             ))
             .await?
             .unwrap_or(0);
@@ -234,22 +228,15 @@ mod tests {
         ];
 
         let available_status = vec!["SUCCESS"];
-        let status_str = available_status
-            .clone()
-            .into_iter()
-            .map(|c| {
-                let mut s = "'".to_string();
-                s.push_str(c);
-                s.push('\'');
-                s
-            })
-            .collect::<Vec<String>>()
-            .join(",");
         let last_batch_time: i64 = taos
             .query_one(format!(
                 "SELECT LAST(ts) FROM task.`{}` where status IN ({}) ",
                 batch_meta_1.batch(),
-                status_str
+                available_status
+                    .iter()
+                    .map(|s| format!("'{}'", s))
+                    .collect::<Vec<String>>()
+                    .join(", ")
             ))
             .await?
             .unwrap_or(0);

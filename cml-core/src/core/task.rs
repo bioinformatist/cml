@@ -3,10 +3,10 @@ use chrono::Duration;
 use derive_getters::Getters;
 
 #[derive(Builder, Getters, Clone)]
-pub struct TaskConfig {
+pub struct TaskConfig<'a> {
     min_start_count: usize,
     min_update_count: usize,
-    working_status: Vec<String>,
+    working_status: Vec<&'a str>,
     limit_time: Duration,
 }
 
