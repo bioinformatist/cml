@@ -164,7 +164,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_concurrent_inference() -> Result<()> {
         let cml = TDengine::from_dsn("taos://");
-        let taos = cml.build().await?;
+        let pool = cml.build_pool();
+        let taos = pool.get().await?;
 
         taos.exec("DROP DATABASE IF EXISTS inference").await?;
         taos.exec(
@@ -209,7 +210,6 @@ mod tests {
         )
         .await?;
 
-        let pool = cml.build_pool();
         let model_update_time = (SystemTime::now() - Duration::from_secs(86400))
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
