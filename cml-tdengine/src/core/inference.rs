@@ -41,7 +41,7 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
         &self,
         metadata: MetaData<Value>,
         target_type: Field,
-        available_status: Vec<&str>,
+        available_status: &[&str],
         data: &mut Vec<NewSample<Value>>,
         pool: &Pool<TaosBuilder>,
         inference_fn: FN,
@@ -54,7 +54,7 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
         taos.use_database("task").await?;
         let last_task_time = taos
             .query_one(format!(
-                "SELECT LAST(ts) FROM task.`{}` where status in ({})",
+                "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({})",
                 metadata.batch(),
                 available_status
                     .iter()
@@ -164,7 +164,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_concurrent_inference() -> Result<()> {
         let cml = TDengine::from_dsn("taos://");
-        let taos = cml.build_sync()?;
+        let taos = cml.build().await?;
 
         taos.exec("DROP DATABASE IF EXISTS inference").await?;
         taos.exec(
@@ -190,12 +190,19 @@ mod tests {
         taos.exec(
             "INSERT INTO task.`FUCK`
             USING task.task
-            TAGS ('2022-08-09 18:18:18.518')
+            TAGS ('2022-08-08 18:18:18.518')
             VALUES (NOW, 'TRAIN')",
         )
         .await?;
         taos.exec(
             "INSERT INTO task.`FUCK`
+            USING task.task
+            TAGS ('2022-08-08 18:18:18.518')
+            VALUES (NOW-2s, 'SUCCESS')",
+        )
+        .await?;
+        taos.exec(
+            "INSERT INTO task.`FUCK8`
             USING task.task
             TAGS ('2022-08-08 18:18:18.518')
             VALUES (NOW, 'SUCCESS')",
@@ -214,6 +221,13 @@ mod tests {
             .inherent_tag_num(1)
             .optional_field_num(0)
             .build()?;
+        let batch_meta_2: MetaData<Value> = MetaDataBuilder::default()
+            .model_update_time(model_update_time)
+            .batch("FUCK8".to_owned())
+            .inherent_field_num(3)
+            .inherent_tag_num(1)
+            .optional_field_num(0)
+            .build()?;
 
         fs::create_dir_all("/tmp/inference_dir/")?;
         fs::write("/tmp/inference_dir/inference_data1.txt", b"8.8")?;
@@ -226,12 +240,27 @@ mod tests {
                 .data_path("/tmp/inference_dir/inference_data2.txt".into())
                 .build()?,
         ];
+        let mut batch_data_2 = vec![NewSampleBuilder::default()
+            .data_path("/tmp/inference_dir/inference_data1.txt".into())
+            .build()?];
 
         let available_status = vec!["SUCCESS"];
-        let last_batch_time: i64 = taos
+        let last_batch_time_1: i64 = taos
             .query_one(format!(
-                "SELECT LAST(ts) FROM task.`{}` where status IN ({}) ",
+                "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({}) ",
                 batch_meta_1.batch(),
+                available_status
+                    .iter()
+                    .map(|s| format!("'{}'", s))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ))
+            .await?
+            .unwrap_or(0);
+        let last_batch_time_2: i64 = taos
+            .query_one(format!(
+                "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({}) ",
+                batch_meta_2.batch(),
                 available_status
                     .iter()
                     .map(|s| format!("'{}'", s))
@@ -243,11 +272,17 @@ mod tests {
         fs::write(
             "/tmp/inference_dir/".to_string()
                 + batch_meta_1.batch()
-                + &last_batch_time.to_string()
+                + &last_batch_time_1.to_string()
                 + ".txt",
             b"1",
         )?;
-
+        fs::write(
+            "/tmp/inference_dir/".to_string()
+                + batch_meta_2.batch()
+                + &last_batch_time_2.to_string()
+                + ".txt",
+            b"8",
+        )?;
         let inference_fn = |vec_data: &mut Vec<NewSample<Value>>,
                             batch: &str,
                             task_time: i64|
@@ -282,8 +317,18 @@ mod tests {
                 cml.inference(
                     batch_meta_1,
                     Field::new("output", Ty::Float, 8),
-                    available_status,
+                    &available_status,
                     &mut batch_data_1,
+                    &pool,
+                    inference_fn,
+                )
+                .await
+                .unwrap();
+                cml.inference(
+                    batch_meta_2,
+                    Field::new("output", Ty::Float, 8),
+                    &available_status,
+                    &mut batch_data_2,
                     &pool,
                     inference_fn,
                 )
@@ -293,10 +338,16 @@ mod tests {
         })
         .await?;
 
-        let mut result = taos.query("SELECT output FROM inference.inference").await?;
+        let mut result = taos
+            .query("SELECT output FROM inference.inference ORDER BY output ASC")
+            .await?;
         let records = result.to_records().await?;
         assert_eq!(
-            vec![vec![Value::Float(9.8)], vec![Value::Float(10.8)]],
+            vec![
+                vec![Value::Float(9.8)],
+                vec![Value::Float(10.8)],
+                vec![Value::Float(16.8)]
+            ],
             records
         );
 
