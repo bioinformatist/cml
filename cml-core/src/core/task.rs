@@ -24,5 +24,5 @@ pub trait Task<M> {
         fining_build_fn: FN,
     ) -> Result<()>
     where
-        FN: Fn(&TaskConfig, &str) -> Result<()> + Send + Sync;
+        FN: Fn(&str) -> Result<()> + Send + Sync;
 }

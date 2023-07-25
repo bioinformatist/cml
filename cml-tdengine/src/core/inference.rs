@@ -63,7 +63,7 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
                     .join(", ")
             ))
             .await?
-            .unwrap_or(0);
+            .expect(format!("There is no task in batch: {}", metadata.batch()).as_str());
         let samples_with_res = inference_fn(data, metadata.batch(), last_task_time);
         taos.use_database("inference").await?;
         let (tag_placeholder, field_placeholder) = metadata.get_placeholders();
@@ -231,7 +231,7 @@ mod tests {
 
         fs::create_dir_all("/tmp/inference_dir/")?;
         fs::write("/tmp/inference_dir/inference_data1.txt", b"8.8")?;
-        fs::write("/tmp/inference_dir/inference_data2.txt", b"9.8")?;
+        fs::write("/tmp/inference_dir/inference_data2.txt", b"98.8")?;
         let mut batch_data_1 = vec![
             NewSampleBuilder::default()
                 .data_path("/tmp/inference_dir/inference_data1.txt".into())
@@ -256,7 +256,7 @@ mod tests {
                     .join(", ")
             ))
             .await?
-            .unwrap_or(0);
+            .unwrap();
         let last_batch_time_2: i64 = taos
             .query_one(format!(
                 "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({}) ",
@@ -268,20 +268,20 @@ mod tests {
                     .join(", ")
             ))
             .await?
-            .unwrap_or(0);
+            .unwrap();
         fs::write(
             "/tmp/inference_dir/".to_string()
                 + batch_meta_1.batch()
                 + &last_batch_time_1.to_string()
                 + ".txt",
-            b"1",
+            b"10",
         )?;
         fs::write(
             "/tmp/inference_dir/".to_string()
                 + batch_meta_2.batch()
                 + &last_batch_time_2.to_string()
                 + ".txt",
-            b"8",
+            b"20",
         )?;
         let inference_fn = |vec_data: &mut Vec<NewSample<Value>>,
                             batch: &str,
@@ -344,9 +344,9 @@ mod tests {
         let records = result.to_records().await?;
         assert_eq!(
             vec![
-                vec![Value::Float(9.8)],
-                vec![Value::Float(10.8)],
-                vec![Value::Float(16.8)]
+                vec![Value::Float(18.8)],
+                vec![Value::Float(28.8)],
+                vec![Value::Float(108.8)]
             ],
             records
         );

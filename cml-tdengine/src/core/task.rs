@@ -58,7 +58,7 @@ impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
         fining_build_fn: FN,
     ) -> Result<()>
     where
-        FN: Fn(&TaskConfig, &str) -> Result<()> + Send + Sync,
+        FN: Fn(&str) -> Result<()> + Send + Sync,
     {
         let taos = self.build_sync().unwrap();
 
@@ -135,13 +135,13 @@ impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
             || {
                 scratch_in_queue
                     .par_iter()
-                    .map(|b| build_from_scratch_fn(&task_config, b).unwrap())
+                    .map(|b| build_from_scratch_fn(b).unwrap())
                     .collect::<Vec<()>>()
             },
             || {
                 fining_in_queue
                     .par_iter()
-                    .map(|b| fining_build_fn(&task_config, b).unwrap())
+                    .map(|b| fining_build_fn(b).unwrap())
                     .collect::<Vec<()>>()
             },
         );
@@ -276,7 +276,7 @@ mod tests {
             VALUES (NOW -3d, 'TRAIN')",
         )?;
 
-        let build_fn = |_c: &TaskConfig, b: &str| -> Result<()> {
+        let build_fn = |b: &str| -> Result<()> {
             type B = ADBackendDecorator<NdArrayBackend<f32>>;
             B::seed(220225);
 
