@@ -301,22 +301,18 @@ mod tests {
                     .unwrap()
                     .parse::<f32>()
                     .unwrap();
-            // inference
-            let inference_data_fn = |inference_data, inference_model| {
-                if inference_data + inference_model > 25.0 {
-                    Some(Value::Float(inference_data + model_inference))
+            for inference_data in vec_data.iter() {
+                // inference
+                let inference_result = fs::read_to_string(inference_data.data_path())
+                    .unwrap()
+                    .parse::<f32>()
+                    .unwrap()
+                    + model_inference;
+                let output = if inference_result > 25.0 {
+                    Some(Value::Float(inference_result))
                 } else {
                     None
-                }
-            };
-            for inference_data in vec_data.iter() {
-                let output = inference_data_fn(
-                    fs::read_to_string(inference_data.data_path())
-                        .unwrap()
-                        .parse::<f32>()
-                        .unwrap(),
-                    model_inference,
-                );
+                };
                 result.push(
                     NewSampleBuilder::default()
                         .data_path(inference_data.data_path().to_path_buf())
