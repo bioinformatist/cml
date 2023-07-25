@@ -63,7 +63,7 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
                     .join(", ")
             ))
             .await?
-            .expect(format!("There is no task in batch: {}", metadata.batch()).as_str());
+            .unwrap_or_else(|| panic!("There is no task in batch: {}", metadata.batch()));
         let samples_with_res = inference_fn(data, metadata.batch(), last_task_time);
         taos.use_database("inference").await?;
         let (tag_placeholder, field_placeholder) = metadata.get_placeholders();
