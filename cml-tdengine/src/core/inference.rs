@@ -301,17 +301,26 @@ mod tests {
                     .unwrap()
                     .parse::<f32>()
                     .unwrap();
+            // inference
+            let inference_data_fn = |inference_data, inference_model| {
+                if inference_data + inference_model > 25.0 {
+                    Some(Value::Float(inference_data + model_inference))
+                } else {
+                    None
+                }
+            };
             for inference_data in vec_data.iter() {
-                // inference
-                let output = fs::read_to_string(inference_data.data_path())
-                    .unwrap()
-                    .parse::<f32>()
-                    .unwrap()
-                    + model_inference;
+                let output = inference_data_fn(
+                    fs::read_to_string(inference_data.data_path())
+                        .unwrap()
+                        .parse::<f32>()
+                        .unwrap(),
+                    model_inference,
+                );
                 result.push(
                     NewSampleBuilder::default()
                         .data_path(inference_data.data_path().to_path_buf())
-                        .output(Some(Value::Float(output)))
+                        .output(output)
                         .build()
                         .unwrap(),
                 );
@@ -349,7 +358,7 @@ mod tests {
         let records = result.to_records().await?;
         assert_eq!(
             vec![
-                vec![Value::Float(18.8)],
+                vec![Value::Null(Ty::Float)],
                 vec![Value::Float(28.8)],
                 vec![Value::Float(108.8)]
             ],
