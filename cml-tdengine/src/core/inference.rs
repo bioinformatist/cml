@@ -168,20 +168,20 @@ mod tests {
         let taos = pool.get().await?;
 
         taos.exec("DROP DATABASE IF EXISTS inference").await?;
+        taos.exec("DROP DATABASE IF EXISTS task").await?;
         taos.exec(
             "CREATE DATABASE IF NOT EXISTS inference 
             PRECISION 'ns'",
         )
         .await?;
+        taos.exec("CREATE DATABASE IF NOT EXISTS task PRECISION 'ns'")
+            .await?;
         taos.exec(
             "CREATE STABLE IF NOT EXISTS inference.inference
             (ts TIMESTAMP, data_path NCHAR(255), output FLOAT)
             TAGS (model_update_time TIMESTAMP)",
         )
         .await?;
-        taos.exec("DROP DATABASE IF EXISTS task").await?;
-        taos.exec("CREATE DATABASE IF NOT EXISTS task PRECISION 'ns'")
-            .await?;
         taos.exec(
             "CREATE STABLE IF NOT EXISTS task.task
             (ts TIMESTAMP, status BINARY(8))
