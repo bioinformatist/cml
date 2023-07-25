@@ -26,7 +26,6 @@ pub trait Inference<M, F, T, C: Manager> {
     async fn inference<FN>(
         &self,
         metadata: MetaData<F>,
-        target_type: M,
         available_status: &[&str],
         data: &mut Vec<NewSample<F>>,
         pool: &Pool<C>,

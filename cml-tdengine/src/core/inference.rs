@@ -40,7 +40,6 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
     async fn inference<FN>(
         &self,
         metadata: MetaData<Value>,
-        target_type: Field,
         available_status: &[&str],
         data: &mut Vec<NewSample<Value>>,
         pool: &Pool<TaosBuilder>,
@@ -87,7 +86,15 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
         for sample in &samples_with_res {
             let output = match sample.output() {
                 Some(value) => ColumnView::from(value.clone()),
-                None => ColumnView::null(1, target_type.ty()),
+                None => ColumnView::null(
+                    1,
+                    taos.query("SELECT * FROM inference LIMIT 0")
+                        .await?
+                        .fields()
+                        .get(2)
+                        .unwrap()
+                        .ty(),
+                ),
             };
 
             let mut values = vec![
@@ -316,7 +323,6 @@ mod tests {
             async move {
                 cml.inference(
                     batch_meta_1,
-                    Field::new("output", Ty::Float, 8),
                     &available_status,
                     &mut batch_data_1,
                     &pool,
@@ -326,7 +332,6 @@ mod tests {
                 .unwrap();
                 cml.inference(
                     batch_meta_2,
-                    Field::new("output", Ty::Float, 8),
                     &available_status,
                     &mut batch_data_2,
                     &pool,
