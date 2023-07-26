@@ -14,13 +14,13 @@ sequenceDiagram
     box rgb(255, 144, 0) CML
     participant CML Core
     participant Dataset
-    end 
+    end
     Source--)CML Core: Arbitrary method of data transmission
     loop Each sample
         CML Core->>Dataset: Add 1 ns as new timestamp
         alt Selected as training data
             CML Core->>Dataset: Mark as training data
-        else 
+        else
             CML Core->>Dataset: Mark as validation data
         end
     end
@@ -36,7 +36,7 @@ If a large amount of data is passed in simultaneously (the recommended method, s
 Someone may create an application server using CML, but there may be more than one client interacting with it at the same time, which may result in more than one record being generated simultaneously. For time-series databases, the timestamp is the unique identifier and the default index in the data table, similar to the primary key in relational databases, so we cannot use the same timestamp directly when inserting data. If multiple records are assigned the same timestamp, it will result in one of the consequences:
 
 1. Some fields of the data written earlier will be overwritten by those written later;
-2. The insertion will fails. 
+2. The insertion will fails.
 
 It is considered a good practice to use the time **when CML receives data** as the real timestamp and make slight adjustments to them.
 
@@ -69,7 +69,7 @@ sequenceDiagram
     box rgb(255, 144, 0) CML
     participant CML Core
     participant Queue
-    end 
+    end
     participant CML Core
     participant Queue
     Database->>Queue: Get model update time of batches
@@ -132,6 +132,35 @@ The user is required to provide a closure to define the training process of the 
 6. Recording to the database when necessary throughout the entire training period.
 
 ## Inference
+
+```mermaid
+sequenceDiagram
+    participant Source
+    box rgb(255, 144, 0) CML
+    participant CML Core
+    participant Dataset
+    end
+    Source --) CML Core: Arbitrary method of data transmission
+    Database ->> CML Core : Get the model information of the batch
+    CML Core ->> CML Core : Inference data
+    loop Each inference result
+        CML Core ->> Dataset: Add 1 ns as new timestamp
+    end
+    Dataset--)Database: Exec insertion statements
+```
+
+### User-defined state
+
+The user is required to provide `available_status` for available model of the batch.
+
+### Custom inference process
+
+The user is required to provide a closure to define the inference process of the model. This process includes but is not limited to the following parts:
+
+1. Define infer data method according to [user-defined state](#user-defined-state)
+2. Import the model (if the method use) according to the batch name and the last task time of the [user-defined state](#user-defined-state) (eg. user-trained or customized model)
+3. Infer your data based on the inference method
+4. Return the inference result
 
 ## Performance recommendation
 
