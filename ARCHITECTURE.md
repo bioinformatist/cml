@@ -157,7 +157,7 @@ The user is required to provide `available_status` for available model of the ba
 
 The user is required to provide a closure to define the inference process of the model. This process includes but is not limited to the following parts:
 
-1. Define infer data method according to [user-defined state](#user-defined-state)(Option)
+1. Define infer data method according to [user-defined state](#user-defined-state)
 2. Import the model (if the method use) according to the batch name and the last task time of the [user-defined state](#user-defined-state) (eg. user-trained or customized model)
 3. Infer your data based on the inference method
 4. Return the inference result
