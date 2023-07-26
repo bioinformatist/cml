@@ -133,6 +133,37 @@ The user is required to provide a closure to define the training process of the 
 
 ## Inference
 
+```mermaid
+sequenceDiagram
+    participant Source
+    box rgb(255, 144, 0) CML
+    participant CML Core
+    participant Dataset
+    end 
+    Source --) CML Core: Arbitrary method of data transmission
+    Dataset ->> CML Core : Get the model information of the batch
+    CML Core ->> CML Core : Inference data
+    loop Each inference result
+        CML Core ->> Dataset: Add 1 ns as new timestamp
+    end
+    Dataset--)Database: Exec insertion statements
+```
+
+### Timestamp
+
+This is the same as mentioned above (see the section [above](#timestamp)).
+
+### User-defined state
+
+The user is required to provide `available_status` for available model of the batch.
+### Custom inference process
+
+The user is required to provide a closure to define the inference process of the model. This process includes but is not limited to the following parts:
+
+1. Get the model of the batch according to the batch name and the last task time of the [user-defined state](#user-defined-state)
+2. Inference your data using model
+3. Return the inference result
+
 ## Performance recommendation
 
 Data can be passed to CML one by one, but for optimal performance, it is recommended to pass in as much data as possible at once.
