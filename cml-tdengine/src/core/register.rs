@@ -156,7 +156,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_concurrent_register() -> Result<()> {
-        let taos = TaosBuilder::from_dsn("taos://")?.build().await?;
+        let cml = TDengine::from_dsn("taos://");
+        let pool = cml.build_pool();
+        let taos = pool.get().await?;
+
         taos.exec("DROP DATABASE IF EXISTS training_data").await?;
         taos.exec(
             "CREATE DATABASE IF NOT EXISTS training_data 
@@ -169,8 +172,6 @@ mod tests {
             TAGS (model_update_time TIMESTAMP, fucking_tag_1 BINARY(255), fucking_tag_2 TINYINT)"
         ).await?;
 
-        let cml = TDengine::from_dsn("taos://");
-        let pool = cml.build_pool();
         let batch_state = BatchState::create(2);
 
         let model_update_time = (SystemTime::now() - Duration::from_secs(86400))
@@ -250,11 +251,11 @@ mod tests {
         })
         .await?;
 
-        let mut result = taos
-            .query("SELECT COUNT(*) FROM training_data.training_data")
-            .await?;
-        let records = result.to_records().await?;
-        assert_eq!(vec![vec![Value::BigInt(4)]], records);
+        let records = taos
+            .query_one("SELECT COUNT(*) FROM training_data.training_data")
+            .await?
+            .unwrap_or(0);
+        assert_eq!(4, records);
 
         taos.exec("DROP DATABASE IF EXISTS training_data").await?;
         Ok(())

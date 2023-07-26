@@ -58,7 +58,7 @@ impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
         fining_build_fn: FN,
     ) -> Result<()>
     where
-        FN: Fn(&TaskConfig, &str) -> Result<()> + Send + Sync,
+        FN: Fn(&str) -> Result<()> + Send + Sync,
     {
         let taos = self.build_sync().unwrap();
 
@@ -96,7 +96,7 @@ impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
         }
 
         if !timeout_clause.is_empty() {
-            taos.exec("INSERT INTO".to_owned() + &timeout_clause.join(" "))?;
+            taos.exec("INSERT INTO ".to_owned() + &timeout_clause.join(" "))?;
         }
         batch_info.retain(|b| !batch_with_task.contains(&b.batch));
 
@@ -106,30 +106,26 @@ impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
         for batch in batch_info {
             match batch.model_update_time {
                 Some(model_update_time) => {
-                    if let Value::BigInt(count) = taos
-                        .query(format!(
+                    let count = taos
+                        .query_one(format!(
                             "SELECT COUNT(*) FROM training_data.`{}` WHERE ts > {}",
                             batch.batch,
                             model_update_time.timestamp_nanos()
                         ))?
-                        .to_rows_vec()?[0][0]
-                    {
-                        if count as usize > *task_config.min_update_count() {
-                            scratch_in_queue.push(batch.batch);
-                        }
+                        .unwrap_or(0);
+                    if count as usize > *task_config.min_update_count() {
+                        scratch_in_queue.push(batch.batch);
                     }
                 }
                 None => {
-                    if let Value::BigInt(count) = taos
-                        .query(format!(
+                    let count = taos
+                        .query_one(format!(
                             "SELECT COUNT(*) FROM training_data.`{}`",
                             batch.batch
                         ))?
-                        .to_rows_vec()?[0][0]
-                    {
-                        if count as usize > *task_config.min_start_count() {
-                            fining_in_queue.push(batch.batch);
-                        }
+                        .unwrap_or(0);
+                    if count as usize > *task_config.min_start_count() {
+                        fining_in_queue.push(batch.batch);
                     }
                 }
             }
@@ -139,13 +135,13 @@ impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
             || {
                 scratch_in_queue
                     .par_iter()
-                    .map(|b| build_from_scratch_fn(&task_config, b).unwrap())
+                    .map(|b| build_from_scratch_fn(b).unwrap())
                     .collect::<Vec<()>>()
             },
             || {
                 fining_in_queue
                     .par_iter()
-                    .map(|b| fining_build_fn(&task_config, b).unwrap())
+                    .map(|b| fining_build_fn(b).unwrap())
                     .collect::<Vec<()>>()
             },
         );
@@ -224,9 +220,7 @@ mod tests {
         let config: TaskConfig = TaskConfigBuilder::default()
             .min_start_count(1)
             .min_update_count(1)
-            .work_dir("/tmp/work_dir".into())
-            .local_dir(Some("/tmp/local_dir".into()))
-            .working_status(vec!["TRAIN".to_string(), "EVAL".to_string()])
+            .working_status(vec!["TRAIN", "EVAL"])
             .limit_time(Duration::days(2))
             .build()?;
 
@@ -261,8 +255,28 @@ mod tests {
             VALUES (NOW, 'true', '/tmp/file_1.txt', 1.0),
             (NOW + 1s, 'false', '/tmp/file_2.txt', 2.0)",
         )?;
+        taos.exec(
+            "INSERT INTO task.`FUCK`
+            USING task.task
+            TAGS ('2022-08-08 18:18:18.518')
+            VALUES (NOW -3d, 'TRAIN')",
+        )?;
 
-        let build_fn = |c: &TaskConfig, b: &str| -> Result<()> {
+        taos.exec(
+            "INSERT INTO training_data.`FUCK8`
+            USING training_data.training_data
+            TAGS (null)
+            VALUES (NOW, 'true', '/tmp/file_1.txt', 1.0),
+            (NOW + 1s, 'false', '/tmp/file_2.txt', 2.0)",
+        )?;
+        taos.exec(
+            "INSERT INTO task.`FUCK8`
+            USING task.task
+            TAGS (null)
+            VALUES (NOW -3d, 'TRAIN')",
+        )?;
+
+        let build_fn = |b: &str| -> Result<()> {
             type B = ADBackendDecorator<NdArrayBackend<f32>>;
             B::seed(220225);
 
@@ -440,8 +454,7 @@ mod tests {
             let config_optimizer =
                 AdamConfig::new().with_weight_decay(Some(WeightDecayConfig::new(5e-5)));
 
-            let working_dir = c.work_dir().to_str().unwrap();
-
+            let working_dir = "/tmp/work_dir";
             let learner = LearnerBuilder::new(working_dir)
                 .with_file_checkpointer(1, CompactRecorder::new())
                 .devices(vec![device])

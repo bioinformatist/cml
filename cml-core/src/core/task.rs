@@ -1,15 +1,12 @@
 use anyhow::Result;
 use chrono::Duration;
 use derive_getters::Getters;
-use std::path::PathBuf;
 
 #[derive(Builder, Getters, Clone)]
-pub struct TaskConfig {
+pub struct TaskConfig<'a> {
     min_start_count: usize,
     min_update_count: usize,
-    work_dir: PathBuf,
-    local_dir: Option<PathBuf>,
-    working_status: Vec<String>,
+    working_status: Vec<&'a str>,
     limit_time: Duration,
 }
 
@@ -27,5 +24,5 @@ pub trait Task<M> {
         fining_build_fn: FN,
     ) -> Result<()>
     where
-        FN: Fn(&TaskConfig, &str) -> Result<()> + Send + Sync;
+        FN: Fn(&str) -> Result<()> + Send + Sync;
 }
