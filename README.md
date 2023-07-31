@@ -5,7 +5,13 @@
     <tbody>
         <tr>
             <td><img src="assets/cml.png" width="188px"/></td>
-            <td><strong>CML is a framework for production-ready continuous machine learning in pure Rust.</strong></td>
+            <td>
+                <p><strong>CML is a framework for production-ready continuous machine learning in pure Rust.</strong></p>
+                <img src='https://github.com/bioinformatist/cml/actions/workflows/test.yml/badge.svg' alt='Test Status' />
+                <a href='https://coveralls.io/github/bioinformatist/cml'>
+                    <img src='https://coveralls.io/repos/github/bioinformatist/cml/badge.svg' alt='Coverage Status' />
+                </a>
+            </td>
         </tr>
     </tbody>
 </table>
