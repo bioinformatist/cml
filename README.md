@@ -8,7 +8,7 @@
             <td>
                 <p><strong>CML is a framework for production-ready continuous machine learning in pure Rust.</strong></p>
                 <a href='https://github.com/bioinformatist/cml/actions/workflows/coveralls.yml'>
-                    <img src='https://github.com/bioinformatist/cml/actions/workflows/coveralls.yml/badge.svg' alt='Coverage Status' />
+                    <img src='https://github.com/bioinformatist/cml/actions/workflows/coveralls.yml/badge.svg' alt='Test Status' />
                 </a>
                 <a href='https://coveralls.io/github/bioinformatist/cml'>
                     <img src='https://coveralls.io/repos/github/bioinformatist/cml/badge.svg' alt='Coverage Status' />
