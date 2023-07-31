@@ -118,7 +118,7 @@ Based on our sequence diagram, the training task should have a definite deadline
 
 #### Solution
 
-The user is required to provide a `Vec<String>` that contains all the tags representing the active status of a task, along with an upper limit on the task duration. If a task is marked as active but exceeds its time limit, it will be removed before a new task queue is generated. This design fully considers the flexibility of the user-defined training process (see the section [below](#custom-training-process)).
+The user is required to provide a parameter `working_status` of type `&[&str]` (see [User-defined state](#user-defined-state)), along with an upper limit on the task duration. If a task is marked as active but exceeds its time limit, it will be removed before a new task queue is generated. This design fully considers the flexibility of the user-defined training process (see the section [below](#custom-training-process)).
 
 ### Custom training process
 
@@ -141,27 +141,37 @@ sequenceDiagram
     participant Dataset
     end
     Source --) CML Core: Arbitrary method of data transmission
-    Database ->> CML Core : Get the model information of the batch
-    CML Core ->> CML Core : Inference data
+    Database --) CML Core : Get the model information of the batch
+    Dataset ->> CML Core : User-defined inference process
     loop Each inference result
         CML Core ->> Dataset: Add 1 ns as new timestamp
     end
     Dataset--)Database: Exec insertion statements
 ```
 
-### User-defined state
-
-The user is required to provide `available_status` for available model of the batch.
-
 ### Custom inference process
 
 The user is required to provide a closure to define the inference process of the model. This process includes but is not limited to the following parts:
 
-1. Define infer data method according to [user-defined state](#user-defined-state)
-2. Import the model (if the method use) according to the batch name and the last task time of the [user-defined state](#user-defined-state) (eg. user-trained or customized model)
-3. Infer your data based on the inference method
-4. Return the inference result
+1. Define infer data method
+2. Initialize the model (if needed) according to the batch name and the timestamp
+3. Perform inference
+
+### Flexible inference strategy
+
+In some cases, users may require a combination of multiple inference processes.
+
+#### Solution
+
+Users can call the `inference` method more than once with different settings, particularly for the `available_status` parameter (see [User-defined state](#user-defined-state)).
 
 ## Performance recommendation
 
-Data can be passed to CML one by one, but for optimal performance, it is recommended to pass in as much data as possible at once.
+Data can be passed to CML one by one, but for best performance, it is recommended to pass in as much data as possible at once.
+
+## User-defined state
+
+In the following two scenarios, users are required to provide a `&[&str]` that:
+
+- In `TaskConfig`: contains all the tags representing the active status of a task
+- In `Inference::inference`: contains all the tags representing the required status of a task. For example, one can mark a certain combination of model status as available during one inference process, but use another combination of status for another inference process.
