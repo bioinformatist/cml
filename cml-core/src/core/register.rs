@@ -1,33 +1,16 @@
-use crate::metadata::MetaData;
+use crate::{metadata::Metadata, SharedBatchState};
 use anyhow::Result;
-use dashmap::DashMap;
 use deadpool::managed::{Manager, Pool};
 use derive_getters::Getters;
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::path::PathBuf;
+use typed_builder::TypedBuilder;
 
-#[derive(Builder, Getters)]
+#[derive(TypedBuilder, Getters)]
 pub struct TrainData<F> {
     data_path: PathBuf,
     gt: F,
-    #[builder(default = "None")]
+    #[builder(default, setter(strip_option))]
     optional_fields: Option<Vec<F>>,
-}
-
-pub struct BatchState {
-    pub map: DashMap<String, bool>,
-}
-
-pub type SharedBatchState = Arc<Mutex<BatchState>>;
-
-impl BatchState {
-    pub fn create(num_shards: usize) -> SharedBatchState {
-        Arc::new(Mutex::new(BatchState {
-            map: DashMap::with_shard_amount(num_shards),
-        }))
-    }
 }
 
 pub trait Register<M, F, C: Manager> {
@@ -40,9 +23,9 @@ pub trait Register<M, F, C: Manager> {
 
     async fn register(
         &self,
-        metadata: MetaData<F>,
+        metadata: &Metadata<F>,
         train_data: Vec<TrainData<F>>,
-        batch_state: Arc<Mutex<BatchState>>,
+        batch_state: &SharedBatchState,
         pool: &Pool<C>,
     ) -> Result<()>;
 }

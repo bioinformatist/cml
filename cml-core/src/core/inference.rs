@@ -1,17 +1,18 @@
-use crate::metadata::MetaData;
+use crate::{metadata::Metadata, SharedBatchState};
 use anyhow::Result;
 use deadpool::managed::{Manager, Pool};
 use derive_getters::Getters;
 use std::path::PathBuf;
+use typed_builder::TypedBuilder;
 
-#[derive(Builder, Getters)]
+#[derive(TypedBuilder, Getters)]
 pub struct NewSample<F> {
     data_path: PathBuf,
-    #[builder(default = "None")]
+    #[builder(default, setter(strip_option))]
     output: Option<F>,
-    #[builder(default = "None")]
+    #[builder(default, setter(strip_option))]
     optional_fields: Option<Vec<F>>,
-    #[builder(default = "None")]
+    #[builder(default, setter(strip_option))]
     optional_tags: Option<Vec<F>>,
 }
 
@@ -25,9 +26,10 @@ pub trait Inference<M, F, T, C: Manager> {
 
     async fn inference<FN>(
         &self,
-        metadata: MetaData<F>,
+        metadata: Metadata<F>,
         available_status: &[&str],
         data: &mut Vec<NewSample<F>>,
+        batch_state: &SharedBatchState,
         pool: &Pool<C>,
         inference_fn: FN,
     ) -> Result<()>

@@ -9,7 +9,7 @@ edition = "2021"
 anyhow = { workspace = true }
 dashmap = { workspace = true }
 derive-getters = "0.2.1"
-derive_builder = { workspace = true }
+typed-builder = { workspace = true }
 deadpool = { workspace = true }
 serde = { workspace = true }
 chrono = { workspace = true }

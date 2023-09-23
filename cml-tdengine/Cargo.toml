@@ -14,7 +14,7 @@ taos-query = { version = "*" }
 anyhow = { workspace = true }
 rand = { workspace = true }
 dashmap = { workspace = true }
-derive_builder = { workspace = true }
+typed-builder = { workspace = true }
 deadpool = { workspace = true }
 serde = { workspace = true }
 chrono = { workspace = true }
@@ -23,5 +23,5 @@ tokio = { version = "1.29.1", features = ["rt", "macros"] }
 
 [dev-dependencies]
 burn = { workspace = true }
-burn-autodiff = { git = "https://github.com/burn-rs/burn.git", branch = "main" }
-burn-ndarray = { git = "https://github.com/burn-rs/burn.git", branch = "main" }
+burn-autodiff = "0.9.0"
+burn-ndarray = "0.9.0"

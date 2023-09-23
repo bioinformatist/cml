@@ -8,8 +8,6 @@
 use anyhow::Result;
 use taos::taos_query::Manager;
 use taos::{sync::*, Pool};
-#[macro_use]
-extern crate derive_builder;
 
 mod core;
 mod models;

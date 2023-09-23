@@ -3,11 +3,11 @@ pub(crate) mod options;
 use anyhow::Result;
 use cml_core::handler::Handler;
 use taos::*;
+use typed_builder::TypedBuilder;
 
 use options::{CacheModel, ReplicaNum, SingleSTable};
 
-#[derive(Builder)]
-#[builder(pattern = "owned")]
+#[derive(TypedBuilder)]
 pub(crate) struct Database<'a> {
     name: &'a str,
     duration: i16,

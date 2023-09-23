@@ -1,8 +1,9 @@
 use anyhow::Result;
 use chrono::Duration;
 use derive_getters::Getters;
+use typed_builder::TypedBuilder;
 
-#[derive(Builder, Getters, Clone)]
+#[derive(TypedBuilder, Getters, Clone)]
 pub struct TaskConfig<'a> {
     min_start_count: usize,
     min_update_count: usize,
