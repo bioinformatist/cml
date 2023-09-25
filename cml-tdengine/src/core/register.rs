@@ -2,7 +2,7 @@ use crate::{models::stables::STable, TDengine};
 use anyhow::Result;
 use cml_core::{
     core::register::{Register, TrainData},
-    Handler, Metadata, SharedBatchState,
+    get_placeholders, Handler, Metadata, SharedBatchState,
 };
 use rand::Rng;
 use std::time::{Duration, SystemTime};
@@ -48,13 +48,7 @@ impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengi
         taos.use_database("training_data").await?;
         let mut stmt = Stmt::init(&taos).await?;
 
-        let (tag_placeholder, field_placeholder) = metadata.get_placeholders();
-
-        stmt.prepare(&format!(
-            "INSERT INTO ? USING training_data TAGS ({}) VALUES ({})",
-            tag_placeholder, field_placeholder
-        ))
-        .await?;
+        // let (tag_placeholder, field_placeholder) = metadata.get_placeholders();
 
         let mut tags = match *metadata.model_update_time() {
             Some(time) => vec![Value::BigInt(time)],
@@ -64,7 +58,7 @@ impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengi
         if let Some(t) = &metadata.optional_tags() {
             tags.extend_from_slice(t)
         };
-        stmt.set_tbname_tags(metadata.batch(), &tags).await?;
+        let tag_placeholder = get_placeholders(&tags);
 
         let values_to_bind = {
             let (lock, cvar) = &**batch_state;
@@ -104,6 +98,16 @@ impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengi
             cvar.notify_one();
             values_to_bind
         };
+
+        let field_placeholder = get_placeholders(values_to_bind.first().unwrap());
+
+        stmt.prepare(&format!(
+            "INSERT INTO ? USING training_data TAGS ({}) VALUES ({})",
+            tag_placeholder, field_placeholder
+        ))
+        .await?;
+
+        stmt.set_tbname_tags(metadata.batch(), &tags).await?;
 
         for values in values_to_bind {
             stmt.bind(&values).await?;
@@ -198,9 +202,6 @@ mod tests {
         let metadata = Metadata::builder()
             .model_update_time(model_update_time)
             .batch("Fuck_1".to_owned())
-            .inherent_field_num(3)
-            .inherent_tag_num(1)
-            .optional_field_num(2)
             .optional_tags(vec![
                 Value::VarChar("fuck_1".to_string()),
                 Value::TinyInt(8),
