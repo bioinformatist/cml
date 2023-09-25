@@ -2,9 +2,7 @@ use crate::{models::stables::STable, TDengine};
 use anyhow::Result;
 use cml_core::{
     core::register::{Register, TrainData},
-    Handler,
-    Metadata,
-    SharedBatchState,
+    Handler, Metadata, SharedBatchState,
 };
 use rand::Rng;
 use std::time::{Duration, SystemTime};
@@ -20,7 +18,6 @@ impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengi
         let mut fields = vec![
             Field::new("ts", Ty::Timestamp, 8),
             Field::new("is_train", Ty::Bool, 1),
-            Field::new("data_path", Ty::NChar, 255),
             gt_type,
         ];
         if let Some(f) = optional_fields {
@@ -61,9 +58,9 @@ impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengi
 
         let mut tags = match *metadata.model_update_time() {
             Some(time) => vec![Value::BigInt(time)],
-            None => vec![Value::Null(Ty::BigInt)]
+            None => vec![Value::Null(Ty::BigInt)],
         };
-        
+
         if let Some(t) = &metadata.optional_tags() {
             tags.extend_from_slice(t)
         };
@@ -88,7 +85,6 @@ impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengi
                 let mut values = vec![
                     ColumnView::from_nanos_timestamp(vec![current_ts]),
                     ColumnView::from_bools(vec![rng.gen::<f32>() >= 0.2]),
-                    ColumnView::from_nchar(vec![data.data_path().as_path().to_str().unwrap()]),
                     ColumnView::from(data.gt().clone()),
                 ];
                 if let Some(fields) = data.optional_fields() {
@@ -188,7 +184,7 @@ mod tests {
         .await?;
         taos.exec(
             "CREATE STABLE IF NOT EXISTS training_data.training_data
-            (ts TIMESTAMP, is_train BOOL, data_path NCHAR(255), gt FLOAT, fucking_field_1 BINARY(255), fucking_field_2 TINYINT)
+            (ts TIMESTAMP, is_train BOOL, gt FLOAT, fucking_field_1 BINARY(255), fucking_field_2 TINYINT)
             TAGS (model_update_time TIMESTAMP, fucking_tag_1 BINARY(255), fucking_tag_2 TINYINT)"
         ).await?;
 
@@ -202,7 +198,7 @@ mod tests {
         let metadata = Metadata::builder()
             .model_update_time(model_update_time)
             .batch("Fuck_1".to_owned())
-            .inherent_field_num(4)
+            .inherent_field_num(3)
             .inherent_tag_num(1)
             .optional_field_num(2)
             .optional_tags(vec![
@@ -213,12 +209,10 @@ mod tests {
 
         let data_1 = vec![
             TrainData::builder()
-                .data_path("/fuck/your/data_1".into())
                 .gt(Value::Float(51.8))
                 .optional_fields(vec![Value::VarChar("fuck".to_string()), Value::TinyInt(18)])
                 .build(),
             TrainData::builder()
-                .data_path("/fuck/your/data_1".into())
                 .gt(Value::Float(1.8))
                 .optional_fields(vec![Value::VarChar("fuck".to_string()), Value::TinyInt(18)])
                 .build(),
@@ -226,12 +220,10 @@ mod tests {
 
         let data_2 = vec![
             TrainData::builder()
-                .data_path("/fuck/your/data_2".into())
                 .gt(Value::Float(51.8))
                 .optional_fields(vec![Value::VarChar("fuck".to_string()), Value::TinyInt(18)])
                 .build(),
             TrainData::builder()
-                .data_path("/fuck/your/data_2".into())
                 .gt(Value::Float(1.8))
                 .optional_fields(vec![Value::VarChar("fuck".to_string()), Value::TinyInt(18)])
                 .build(),

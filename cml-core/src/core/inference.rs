@@ -2,12 +2,10 @@ use crate::{metadata::Metadata, SharedBatchState};
 use anyhow::Result;
 use deadpool::managed::{Manager, Pool};
 use derive_getters::Getters;
-use std::path::PathBuf;
 use typed_builder::TypedBuilder;
 
 #[derive(TypedBuilder, Getters)]
 pub struct NewSample<F> {
-    data_path: PathBuf,
     #[builder(default, setter(strip_option))]
     output: Option<F>,
     #[builder(default, setter(strip_option))]
