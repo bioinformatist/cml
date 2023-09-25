@@ -7,7 +7,11 @@ use std::{
 };
 
 pub mod core;
-pub mod handler;
-pub mod metadata;
+mod handler;
+mod metadata;
 
 pub type SharedBatchState = Arc<(Mutex<HashSet<String>>, Condvar)>;
+
+pub use core::register::Register;
+pub use handler::Handler;
+pub use metadata::Metadata;

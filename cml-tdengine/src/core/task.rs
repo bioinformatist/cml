@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use cml_core::{
     core::task::{Task, TaskConfig},
-    handler::Handler,
+    Handler,
 };
 use taos::sync::*;
 

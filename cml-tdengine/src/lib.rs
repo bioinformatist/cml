@@ -13,18 +13,18 @@ mod core;
 mod models;
 
 #[derive(Clone)]
-struct TDengine<D> {
+pub struct TDengine<D> {
     dsn: D,
 }
 
 impl<D: IntoDsn + Clone> TDengine<D> {
     #[allow(dead_code)]
-    fn from_dsn(dsn: D) -> Self {
+    pub fn from_dsn(dsn: D) -> Self {
         TDengine { dsn }
     }
 
     #[allow(dead_code)]
-    fn build_pool(&self) -> Pool<TaosBuilder> {
+    pub fn build_pool(&self) -> Pool<TaosBuilder> {
         Pool::builder(Manager::from_dsn(self.dsn.clone()).unwrap().0)
             .max_size(88)
             .build()
@@ -39,3 +39,5 @@ impl<D: IntoDsn + Clone> TDengine<D> {
         Ok(TaosBuilder::from_dsn(self.dsn.clone())?.build()?)
     }
 }
+
+pub use models::databases::{options::*, Database};

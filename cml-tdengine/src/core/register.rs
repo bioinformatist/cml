@@ -2,8 +2,8 @@ use crate::{models::stables::STable, TDengine};
 use anyhow::Result;
 use cml_core::{
     core::register::{Register, TrainData},
-    handler::Handler,
-    metadata::Metadata,
+    Handler,
+    Metadata,
     SharedBatchState,
 };
 use rand::Rng;
@@ -59,7 +59,11 @@ impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengi
         ))
         .await?;
 
-        let mut tags = vec![Value::BigInt(*metadata.model_update_time())];
+        let mut tags = match *metadata.model_update_time() {
+            Some(time) => vec![Value::BigInt(time)],
+            None => vec![Value::Null(Ty::BigInt)]
+        };
+        
         if let Some(t) = &metadata.optional_tags() {
             tags.extend_from_slice(t)
         };
@@ -126,7 +130,7 @@ mod tests {
         options::{CacheModel, ReplicaNum, SingleSTable},
         Database,
     };
-    use cml_core::{core::register::TrainData, metadata::Metadata};
+    use cml_core::{core::register::TrainData, Metadata};
 
     #[tokio::test]
     async fn test_register_init() -> Result<()> {

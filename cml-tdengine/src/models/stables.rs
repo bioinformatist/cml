@@ -1,5 +1,5 @@
 use anyhow::Result;
-use cml_core::handler::Handler;
+use cml_core::Handler;
 use taos::*;
 
 pub struct STable<'a> {

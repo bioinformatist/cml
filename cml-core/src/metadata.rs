@@ -3,7 +3,8 @@ use typed_builder::TypedBuilder;
 
 #[derive(TypedBuilder, Getters, Clone)]
 pub struct Metadata<F> {
-    model_update_time: i64,
+    #[builder(default, setter(strip_option))]
+    model_update_time: Option<i64>,
     pub batch: String,
     inherent_field_num: usize,
     inherent_tag_num: usize,
