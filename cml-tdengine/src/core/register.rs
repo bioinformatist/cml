@@ -48,8 +48,6 @@ impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengi
         taos.use_database("training_data").await?;
         let mut stmt = Stmt::init(&taos).await?;
 
-        // let (tag_placeholder, field_placeholder) = metadata.get_placeholders();
-
         let mut tags = match *metadata.model_update_time() {
             Some(time) => vec![Value::BigInt(time)],
             None => vec![Value::Null(Ty::BigInt)],
@@ -176,8 +174,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_register() -> Result<()> {
-        let cml = TDengine::from_dsn("taos://");
-        let pool = cml.build_pool();
+        let cml = Arc::new(TDengine::from_dsn("taos://"));
+        let pool = Arc::new(cml.build_pool());
         let taos = pool.get().await?;
 
         taos.exec("DROP DATABASE IF EXISTS training_data").await?;
@@ -199,14 +197,16 @@ mod tests {
             .unwrap()
             .as_nanos() as i64;
 
-        let metadata = Metadata::builder()
-            .model_update_time(model_update_time)
-            .batch("Fuck_1".to_owned())
-            .optional_tags(vec![
-                Value::VarChar("fuck_1".to_string()),
-                Value::TinyInt(8),
-            ])
-            .build();
+        let metadata = Arc::new(
+            Metadata::builder()
+                .model_update_time(model_update_time)
+                .batch("Fuck_1".to_owned())
+                .optional_tags(vec![
+                    Value::VarChar("fuck_1".to_string()),
+                    Value::TinyInt(8),
+                ])
+                .build(),
+        );
 
         let data_1 = vec![
             TrainData::builder()
