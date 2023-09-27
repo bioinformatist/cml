@@ -162,7 +162,7 @@ mod tests {
     async fn test_task_running_in_parallel() -> Result<()> {
         let cml = TDengine::from_dsn("taos://");
         let taos = cml.build_sync().unwrap();
-        let working_status = vec!["TRAIN", "EVAL"];
+        let working_status = ["TRAIN", "EVAL"];
         let config: TaskConfig = TaskConfig::builder()
             .min_start_count(1)
             .min_update_count(1)

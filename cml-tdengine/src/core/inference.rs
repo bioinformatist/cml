@@ -38,7 +38,7 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
         available_status: &[&str],
         data: &mut Vec<NewSample<Value>>,
         batch_state: &SharedBatchState,
-        pool: &deadpool::managed::Pool<Manager<taos::TaosBuilder>>,
+        pool: &Pool<TaosBuilder>,
         inference_fn: FN,
     ) -> Result<()>
     where
@@ -270,7 +270,7 @@ mod tests {
                 inference_file2.path().to_str().unwrap().to_owned(),
             )])
             .build()];
-        let available_status = vec!["SUCCESS"];
+        let available_status = ["SUCCESS"];
         let last_batch_time_1: i64 = taos
             .query_one(format!(
                 "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({}) ",
@@ -353,12 +353,10 @@ mod tests {
         };
         let batch_state = Arc::new((Mutex::new(HashSet::new()), Condvar::new()));
         let cml_2 = cml.clone();
-        let available_status_2 = available_status.clone();
         let batch_state_2 = batch_state.clone();
         let pool_2 = pool.clone();
         let cml_3 = cml.clone();
         let batch_meta_2_dup = batch_meta_2.clone();
-        let available_status_3 = available_status.clone();
         let batch_state_3 = batch_state.clone();
         let pool_3: deadpool::managed::Pool<Manager<TaosBuilder>> = pool.clone();
         let task1 = tokio::spawn({
@@ -380,7 +378,7 @@ mod tests {
                 cml_2
                     .inference(
                         batch_meta_2,
-                        &available_status_2,
+                        &available_status,
                         &mut batch_data_2,
                         &batch_state_2,
                         &pool_2,
@@ -396,7 +394,7 @@ mod tests {
                 cml_3
                     .inference(
                         batch_meta_2_dup,
-                        &available_status_3,
+                        &available_status,
                         &mut batch_data_3,
                         &batch_state_3,
                         &pool_3,
