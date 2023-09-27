@@ -38,7 +38,7 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
         available_status: &[&str],
         data: &mut Vec<NewSample<Value>>,
         batch_state: &SharedBatchState,
-        pool: &Pool<TaosBuilder>,
+        pool: &deadpool::managed::Pool<Manager<taos::TaosBuilder>>,
         inference_fn: FN,
     ) -> Result<()>
     where
