@@ -7,7 +7,7 @@ use typed_builder::TypedBuilder;
 pub struct TaskConfig<'a> {
     min_start_count: usize,
     min_update_count: usize,
-    working_status: Vec<&'a str>,
+    working_status: &'a [&'a str],
     limit_time: Duration,
 }
 

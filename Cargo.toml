@@ -9,8 +9,7 @@ resolver = "2"
 anyhow = "1"
 rand = "0.8.5"
 dashmap = { version = "5.5.0", features = ["inline"] }
-derive_builder = "0.12.0"
-deadpool = { version = "0.9.5", default-features = false, features = ["managed"] }
+deadpool = { version = "0.10.0", default-features = false, features = ["managed", "rt_tokio_1"] }
 chrono = "0.4.26"
 burn = "0.9.0"
 serde = { version = "1.0.163", features = ["derive"] }
