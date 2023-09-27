@@ -87,7 +87,7 @@ impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
                 timeout_clause.push(format!(
                     "task.`{}` (ts, status) VALUES ({}, '{}') ",
                     task.batch,
-                    task.ts.timestamp_nanos(),
+                    task.ts.timestamp_nanos_opt().unwrap(),
                     "DEAD"
                 ));
             } else {
@@ -110,7 +110,7 @@ impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
                         .query_one(format!(
                             "SELECT COUNT(*) FROM training_data.`{}` WHERE ts > {}",
                             batch.batch,
-                            model_update_time.timestamp_nanos()
+                            model_update_time.timestamp_nanos_opt().unwrap(),
                         ))?
                         .unwrap_or(0);
                     if count as usize > *task_config.min_update_count() {
@@ -146,6 +146,142 @@ impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
             },
         );
 
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+    use cml_core::core::task::{Task, TaskConfig};
+    use std::{env, fs, io::prelude::*};
+    use tempfile::NamedTempFile;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_task_running_in_parallel() -> Result<()> {
+        let cml = TDengine::from_dsn("taos://");
+        let taos = cml.build_sync().unwrap();
+        let working_status = vec!["TRAIN", "EVAL"];
+        let config: TaskConfig = TaskConfig::builder()
+            .min_start_count(1)
+            .min_update_count(1)
+            .working_status(&working_status)
+            .limit_time(Duration::days(2))
+            .build();
+        let mut training_data_file1 = NamedTempFile::new()?;
+        write!(training_data_file1, "8.8")?;
+        let mut training_data_file2 = NamedTempFile::new()?;
+        write!(training_data_file2, "9.8")?;
+        let mut training_data_file3 = NamedTempFile::new()?;
+        write!(training_data_file3, "10.8")?;
+        taos.exec("DROP DATABASE IF EXISTS training_data")?;
+        taos.exec("DROP DATABASE IF EXISTS task")?;
+
+        taos.exec("CREATE DATABASE IF NOT EXISTS training_data PRECISION 'ns'")?;
+        taos.exec("CREATE DATABASE IF NOT EXISTS task PRECISION 'ns'")?;
+
+        taos.exec(
+            "CREATE STABLE IF NOT EXISTS training_data.training_data
+            (ts TIMESTAMP, is_train BOOL, gt FLOAT, data_path NCHAR(255))
+            TAGS (model_update_time TIMESTAMP)",
+        )?;
+        taos.exec(
+            "CREATE STABLE IF NOT EXISTS task.task
+            (ts TIMESTAMP, status BINARY(8))
+            TAGS (model_update_time TIMESTAMP)",
+        )?;
+
+        taos.exec(format!(
+            "INSERT INTO training_data.`FUCK`
+            USING training_data.training_data
+            TAGS ('2022-08-08 18:18:18.518')
+            VALUES (NOW, 'true', 1.0, '{}'),
+            (NOW + 1s, 'false', 2.0, '{}')",
+            training_data_file1.path().to_str().unwrap(),
+            training_data_file2.path().to_str().unwrap()
+        ))?;
+        taos.exec(
+            "INSERT INTO task.`FUCK`
+            USING task.task
+            TAGS ('2022-08-08 18:18:18.518')
+            VALUES (NOW -3d, 'TRAIN')",
+        )?;
+
+        taos.exec(format!(
+            "INSERT INTO training_data.`FUCK8`
+            USING training_data.training_data
+            TAGS (null)
+            VALUES (NOW, 'true', 1.0, '{}'),
+            (NOW + 1s, 'false', 2.0, '{}')",
+            training_data_file1.path().to_str().unwrap(),
+            training_data_file3.path().to_str().unwrap()
+        ))?;
+        taos.exec(
+            "INSERT INTO task.`FUCK8`
+            USING task.task
+            TAGS (null)
+            VALUES (NOW -3d, 'TRAIN')",
+        )?;
+        let model_dir = env::temp_dir().join("model_dir");
+        fs::create_dir_all(&model_dir)?;
+        let build_fn = |batch: &str| -> Result<()> {
+            let taos = TDengine::from_dsn("taos://").build_sync().unwrap();
+            taos.exec(format!(
+                "INSERT INTO task.`{}`
+                USING task.task
+                TAGS (null)
+                VALUES (NOW, 'TRAIN')",
+                batch
+            ))?;
+            // get data for building model
+            let training_data: Vec<String> = taos
+                .query(format!("SELECT data_path FROM training_data.`{}`", batch))
+                .unwrap()
+                .deserialize()
+                .try_collect()?;
+            let last_ts: i64 = taos
+                .query_one(format!(
+                    "SELECT LAST(ts) FROM task.`{}` WHERE status IN ('TRAIN')",
+                    batch
+                ))
+                .unwrap()
+                .unwrap();
+            let model_dir = env::temp_dir().join("model_dir");
+            // build model
+            let model_sum: f32 = training_data
+                .iter()
+                .map(|data_path| {
+                    fs::read_to_string(data_path)
+                        .unwrap()
+                        .parse::<f32>()
+                        .unwrap()
+                })
+                .sum();
+            fs::write(
+                model_dir.join(batch.to_owned() + &last_ts.to_string() + ".txt"),
+                format!("{}", model_sum),
+            )?;
+            taos.exec(format!(
+                "INSERT INTO task.`{}`
+                USING task.task
+                TAGS (NOW)
+                VALUES ({}, 'SUCCESS')",
+                batch, last_ts
+            ))?;
+            Ok(())
+        };
+        cml.run(config, build_fn, build_fn)?;
+        let records = taos
+            .query_one("SELECT COUNT(*) FROM task.task")
+            .unwrap()
+            .unwrap_or(0);
+        assert_eq!(4, records);
+        let model_file_count = fs::read_dir(&model_dir).unwrap().count();
+        assert_eq!(2, model_file_count);
+        fs::remove_dir_all(model_dir)?;
+        taos.exec("DROP DATABASE IF EXISTS training_data")?;
+        taos.exec("DROP DATABASE IF EXISTS task")?;
         Ok(())
     }
 }
