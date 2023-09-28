@@ -42,7 +42,7 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
         inference_fn: FN,
     ) -> Result<()>
     where
-        FN: FnOnce(&mut Vec<NewSample<Value>>, &str, i64),
+        FN: FnOnce(&mut [NewSample<Value>], &str, i64),
     {
         let taos = pool.get().await?;
         let mut stmt = Stmt::init(&taos).await?;
@@ -310,8 +310,7 @@ mod tests {
                 .join(batch_meta_2.batch().to_string() + &last_batch_time_2.to_string() + ".txt"),
             b"20",
         )?;
-        let inference_fn = |vec_data: &mut Vec<NewSample<Value>>, batch: &str, task_time: i64| {
-            // let mut result: Vec<NewSample<Value>> = Vec::new();
+        let inference_fn = |vec_data: &mut [NewSample<Value>], batch: &str, task_time: i64| {
             let working_dir = env::temp_dir().join("inference_dir/");
             let model_inference = fs::read_to_string(
                 working_dir.join(batch.to_string() + &task_time.to_string() + ".txt"),
