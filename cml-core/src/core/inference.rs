@@ -7,7 +7,7 @@ use typed_builder::TypedBuilder;
 #[derive(TypedBuilder, Getters)]
 pub struct NewSample<F> {
     #[builder(default, setter(strip_option))]
-    output: Option<F>,
+    pub output: Option<F>,
     #[builder(default, setter(strip_option))]
     optional_fields: Option<Vec<F>>,
     #[builder(default, setter(strip_option))]
@@ -24,13 +24,13 @@ pub trait Inference<M, F, T, C: Manager> {
 
     async fn inference<FN>(
         &self,
-        metadata: Metadata<F>,
+        metadata: &Metadata<F>,
         available_status: &[&str],
-        data: &mut Vec<NewSample<F>>,
+        data: Vec<NewSample<F>>,
         batch_state: &SharedBatchState,
         pool: &Pool<C>,
         inference_fn: FN,
     ) -> Result<()>
     where
-        FN: FnOnce(&mut Vec<NewSample<F>>, &str, T) -> Vec<NewSample<F>>;
+        FN: FnOnce(&mut [NewSample<F>], &str, T);
 }
