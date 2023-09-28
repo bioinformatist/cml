@@ -10,6 +10,6 @@ anyhow = { workspace = true }
 dashmap = { workspace = true }
 derive-getters = "0.2.1"
 typed-builder = { workspace = true }
-deadpool = { workspace = true }
+deadpool = { version = "0.10.0", default-features = false, features = ["managed", "rt_tokio_1"] }
 serde = { workspace = true }
 chrono = { workspace = true }

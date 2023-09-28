@@ -15,7 +15,6 @@ anyhow = { workspace = true }
 rand = { workspace = true }
 dashmap = { workspace = true }
 typed-builder = { workspace = true }
-deadpool = { workspace = true }
 serde = { workspace = true }
 chrono = { workspace = true }
 rayon = "1.7.0"
