@@ -32,5 +32,5 @@ pub trait Inference<M, F, T, C: Manager> {
         inference_fn: FN,
     ) -> Result<()>
     where
-        FN: FnOnce(Vec<NewSample<F>>, &str, T) -> Vec<NewSample<F>>;
+        FN: FnOnce(&mut Vec<NewSample<F>>, &str, T) -> ();
 }

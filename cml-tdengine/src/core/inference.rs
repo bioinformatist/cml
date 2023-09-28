@@ -36,13 +36,13 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
         &self,
         metadata: &Metadata<Value>,
         available_status: &[&str],
-        data: Vec<NewSample<Value>>,
+        mut data: Vec<NewSample<Value>>,
         batch_state: &SharedBatchState,
         pool: &Pool<TaosBuilder>,
         inference_fn: FN,
     ) -> Result<()>
     where
-        FN: FnOnce(Vec<NewSample<Value>>, &str, i64) -> Vec<NewSample<Value>>,
+        FN: FnOnce(&mut Vec<NewSample<Value>>, &str, i64) -> (),
     {
         let taos = pool.get().await?;
         let mut stmt = Stmt::init(&taos).await?;
@@ -59,7 +59,7 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
             ))
             .await?
             .unwrap_or_else(|| panic!("There is no task in batch: {}", metadata.batch()));
-        let samples_with_res = inference_fn(data, metadata.batch(), last_task_time);
+        inference_fn(&mut data, metadata.batch(), last_task_time);
         taos.use_database("inference").await?;
         let mut tags = match *metadata.model_update_time() {
             Some(time) => vec![Value::BigInt(time)],
@@ -91,7 +91,7 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
                 .as_nanos() as i64;
 
             let mut values_to_bind = Vec::<Vec<ColumnView>>::new();
-            for sample in &samples_with_res {
+            for sample in data {
                 let output = match sample.output() {
                     Some(value) => ColumnView::from(value.clone()),
                     None => null.clone(),
@@ -138,6 +138,7 @@ mod tests {
         options::{CacheModel, ReplicaNum, SingleSTable},
         Database,
     };
+    use anyhow::Ok;
     use cml_core::{core::inference::NewSample, Metadata};
     use std::{
         collections::HashSet,
@@ -309,41 +310,38 @@ mod tests {
                 .join(batch_meta_2.batch().to_string() + &last_batch_time_2.to_string() + ".txt"),
             b"20",
         )?;
-        let inference_fn = |mut vec_data: Vec<NewSample<Value>>,
-                            batch: &str,
-                            task_time: i64|
-         -> Vec<NewSample<Value>> {
-            // let mut result: Vec<NewSample<Value>> = Vec::new();
-            let working_dir = env::temp_dir().join("inference_dir/");
-            let model_inference = fs::read_to_string(
-                working_dir.join(batch.to_string() + &task_time.to_string() + ".txt"),
-            )
-            .unwrap()
-            .parse::<f32>()
-            .unwrap();
-            vec_data.iter_mut().for_each(|inference_data| {
-                let tmp = fs::read_to_string(
-                    inference_data
-                        .optional_fields()
-                        .as_ref()
-                        .unwrap()
-                        .first()
-                        .unwrap()
-                        .to_string()
-                        .unwrap(),
+        let inference_fn =
+            |vec_data: &mut Vec<NewSample<Value>>, batch: &str, task_time: i64| -> () {
+                // let mut result: Vec<NewSample<Value>> = Vec::new();
+                let working_dir = env::temp_dir().join("inference_dir/");
+                let model_inference = fs::read_to_string(
+                    working_dir.join(batch.to_string() + &task_time.to_string() + ".txt"),
                 )
                 .unwrap()
                 .parse::<f32>()
-                .unwrap()
-                    + model_inference;
-                inference_data.output = if tmp > 25.0 {
-                    Some(Value::Float(tmp))
-                } else {
-                    Some(Value::Null(Ty::Float))
-                };
-            });
-            vec_data
-        };
+                .unwrap();
+                vec_data.iter_mut().for_each(|inference_data| {
+                    let tmp = fs::read_to_string(
+                        inference_data
+                            .optional_fields()
+                            .as_ref()
+                            .unwrap()
+                            .first()
+                            .unwrap()
+                            .to_string()
+                            .unwrap(),
+                    )
+                    .unwrap()
+                    .parse::<f32>()
+                    .unwrap()
+                        + model_inference;
+                    inference_data.output = if tmp > 25.0 {
+                        Some(Value::Float(tmp))
+                    } else {
+                        Some(Value::Null(Ty::Float))
+                    };
+                });
+            };
         let batch_state = Arc::new((Mutex::new(HashSet::new()), Condvar::new()));
         let cml_2 = cml.clone();
         let batch_state_2 = batch_state.clone();
