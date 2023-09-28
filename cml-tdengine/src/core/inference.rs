@@ -34,15 +34,15 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
 
     async fn inference<FN>(
         &self,
-        metadata: Metadata<Value>,
+        metadata: &Metadata<Value>,
         available_status: &[&str],
-        data: &mut Vec<NewSample<Value>>,
+        data: Vec<NewSample<Value>>,
         batch_state: &SharedBatchState,
         pool: &Pool<TaosBuilder>,
         inference_fn: FN,
     ) -> Result<()>
     where
-        FN: FnOnce(&mut Vec<NewSample<Value>>, &str, i64) -> Vec<NewSample<Value>>,
+        FN: FnOnce(Vec<NewSample<Value>>, &str, i64) -> Vec<NewSample<Value>>,
     {
         let taos = pool.get().await?;
         let mut stmt = Stmt::init(&taos).await?;
@@ -184,8 +184,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_concurrent_inference() -> Result<()> {
-        let cml = TDengine::from_dsn("taos://");
-        let pool = cml.build_pool();
+        let cml = Arc::new(TDengine::from_dsn("taos://"));
+        let pool = Arc::new(cml.build_pool());
         let taos = pool.get().await?;
 
         taos.exec("DROP DATABASE IF EXISTS inference").await?;
@@ -239,16 +239,18 @@ mod tests {
             .model_update_time(model_update_time)
             .batch("FUCK".to_owned())
             .build();
-        let batch_meta_2: Metadata<Value> = Metadata::builder()
-            .model_update_time(model_update_time)
-            .batch("FUCK8".to_owned())
-            .build();
+        let batch_meta_2 = Arc::new(
+            Metadata::builder()
+                .model_update_time(model_update_time)
+                .batch("FUCK8".to_owned())
+                .build(),
+        );
         let mut inference_file1 = NamedTempFile::new()?;
         write!(inference_file1, "8.8")?;
         let mut inference_file2 = NamedTempFile::new()?;
         write!(inference_file2, "98.8")?;
 
-        let mut batch_data_1 = vec![
+        let batch_data_1 = vec![
             NewSample::builder()
                 .optional_fields(vec![Value::NChar(
                     inference_file1.path().to_str().unwrap().to_owned(),
@@ -260,12 +262,12 @@ mod tests {
                 )])
                 .build(),
         ];
-        let mut batch_data_2 = vec![NewSample::builder()
+        let batch_data_2 = vec![NewSample::builder()
             .optional_fields(vec![Value::NChar(
                 inference_file1.path().to_str().unwrap().to_owned(),
             )])
             .build()];
-        let mut batch_data_3 = vec![NewSample::builder()
+        let batch_data_3 = vec![NewSample::builder()
             .optional_fields(vec![Value::NChar(
                 inference_file2.path().to_str().unwrap().to_owned(),
             )])
@@ -307,11 +309,11 @@ mod tests {
                 .join(batch_meta_2.batch().to_string() + &last_batch_time_2.to_string() + ".txt"),
             b"20",
         )?;
-        let inference_fn = |vec_data: &mut Vec<NewSample<Value>>,
+        let inference_fn = |mut vec_data: Vec<NewSample<Value>>,
                             batch: &str,
                             task_time: i64|
          -> Vec<NewSample<Value>> {
-            let mut result: Vec<NewSample<Value>> = Vec::new();
+            // let mut result: Vec<NewSample<Value>> = Vec::new();
             let working_dir = env::temp_dir().join("inference_dir/");
             let model_inference = fs::read_to_string(
                 working_dir.join(batch.to_string() + &task_time.to_string() + ".txt"),
@@ -319,9 +321,8 @@ mod tests {
             .unwrap()
             .parse::<f32>()
             .unwrap();
-            for inference_data in vec_data.iter() {
-                // inference
-                let inference_result = fs::read_to_string(
+            vec_data.iter_mut().for_each(|inference_data| {
+                let tmp = fs::read_to_string(
                     inference_data
                         .optional_fields()
                         .as_ref()
@@ -335,21 +336,13 @@ mod tests {
                 .parse::<f32>()
                 .unwrap()
                     + model_inference;
-                let output = if inference_result > 25.0 {
-                    Some(Value::Float(inference_result))
+                inference_data.output = if tmp > 25.0 {
+                    Some(Value::Float(tmp))
                 } else {
                     Some(Value::Null(Ty::Float))
                 };
-                result.push(
-                    NewSample::builder()
-                        .optional_fields(
-                            inference_data.optional_fields().as_ref().unwrap().to_vec(),
-                        )
-                        .output(output.unwrap())
-                        .build(),
-                );
-            }
-            result
+            });
+            vec_data
         };
         let batch_state = Arc::new((Mutex::new(HashSet::new()), Condvar::new()));
         let cml_2 = cml.clone();
@@ -358,13 +351,13 @@ mod tests {
         let cml_3 = cml.clone();
         let batch_meta_2_dup = batch_meta_2.clone();
         let batch_state_3 = batch_state.clone();
-        let pool_3: deadpool::managed::Pool<Manager<TaosBuilder>> = pool.clone();
+        let pool_3 = pool.clone();
         let task1 = tokio::spawn({
             async move {
                 cml.inference(
-                    batch_meta_1,
+                    &batch_meta_1,
                     &available_status,
-                    &mut batch_data_1,
+                    batch_data_1,
                     &batch_state,
                     &pool,
                     inference_fn,
@@ -377,9 +370,9 @@ mod tests {
             async move {
                 cml_2
                     .inference(
-                        batch_meta_2,
+                        &batch_meta_2,
                         &available_status,
-                        &mut batch_data_2,
+                        batch_data_2,
                         &batch_state_2,
                         &pool_2,
                         inference_fn,
@@ -393,9 +386,9 @@ mod tests {
             async move {
                 cml_3
                     .inference(
-                        batch_meta_2_dup,
+                        &batch_meta_2_dup,
                         &available_status,
-                        &mut batch_data_3,
+                        batch_data_3,
                         &batch_state_3,
                         &pool_3,
                         inference_fn,
