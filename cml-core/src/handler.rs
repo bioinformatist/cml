@@ -1,6 +1,7 @@
 use anyhow::Result;
+use std::future::Future;
 
 pub trait Handler {
     type Database;
-    async fn init(self, client: &Self::Database, db: Option<&str>) -> Result<()>;
+    fn init(self, client: &Self::Database, db: Option<&str>) -> impl Future<Output = Result<()>> + Send;
 }

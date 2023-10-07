@@ -2,8 +2,7 @@
 //!
 //!
 
-#![allow(incomplete_features)]
-#![feature(async_fn_in_trait)]
+#![feature(return_position_impl_trait_in_trait)]
 
 use anyhow::Result;
 use taos::taos_query::Manager;
@@ -35,7 +34,7 @@ impl<D: IntoDsn + Clone> TDengine<D> {
         Ok(taos_query::AsyncTBuilder::build(&TaosBuilder::from_dsn(self.dsn.clone())?).await?)
     }
 
-    fn build_sync(&self) -> Result<Taos> {
+    pub fn build_sync(&self) -> Result<Taos> {
         Ok(TaosBuilder::from_dsn(self.dsn.clone())?.build()?)
     }
 }

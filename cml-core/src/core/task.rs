@@ -2,21 +2,22 @@ use anyhow::Result;
 use chrono::Duration;
 use derive_getters::Getters;
 use typed_builder::TypedBuilder;
+use std::future::Future;
 
 #[derive(TypedBuilder, Getters, Clone)]
 pub struct TaskConfig<'a> {
     min_start_count: usize,
     min_update_count: usize,
-    working_status: &'a [&'a str],
+    working_status: &'a [String],
     limit_time: Duration,
 }
 
 pub trait Task<M> {
-    async fn init_task(
+    fn init_task(
         &self,
         optional_fields: Option<Vec<M>>,
         optional_tags: Option<Vec<M>>,
-    ) -> Result<()>;
+    ) -> impl Future<Output = Result<()>> + Send;
 
     fn run<FN>(
         &self,
