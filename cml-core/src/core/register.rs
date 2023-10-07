@@ -4,7 +4,7 @@ use deadpool::managed::{Manager, Pool};
 use derive_getters::Getters;
 use typed_builder::TypedBuilder;
 
-#[derive(TypedBuilder, Getters)]
+#[derive(TypedBuilder, Getters, Clone)]
 pub struct TrainData<F> {
     gt: F,
     #[builder(default, setter(strip_option))]
@@ -23,7 +23,7 @@ pub trait Register<M, F, C: Manager> {
         &self,
         metadata: &Metadata<F>,
         train_data: Vec<TrainData<F>>,
-        batch_state: &SharedBatchState,
+        batch_state: Option<&SharedBatchState>,
         pool: &Pool<C>,
     ) -> Result<()>;
 }

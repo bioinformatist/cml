@@ -41,7 +41,7 @@ impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengi
         &self,
         metadata: &Metadata<Value>,
         train_data: Vec<TrainData<Value>>,
-        batch_state: &SharedBatchState,
+        batch_state: Option<&SharedBatchState>,
         pool: &Pool<TaosBuilder>,
     ) -> Result<()> {
         let taos = pool.get().await?;
@@ -59,12 +59,15 @@ impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengi
         let tag_placeholder = get_placeholders(&tags);
 
         let values_to_bind = {
-            let (lock, cvar) = &**batch_state;
-            let mut batch_state = lock.lock().unwrap();
-            while batch_state.contains(&metadata.batch) {
-                batch_state = cvar.wait(batch_state).unwrap();
-            }
-            batch_state.insert(metadata.batch.clone());
+            let batch_state_cvar = batch_state.map(|batch_state| {
+                let (lock, cvar) = &**batch_state;
+                let mut batch_state = lock.lock().unwrap();
+                while batch_state.contains(&metadata.batch) {
+                    batch_state = cvar.wait(batch_state).unwrap();
+                }
+                batch_state.insert(metadata.batch.clone());
+                (batch_state, cvar)
+            });
 
             let mut rng = rand::thread_rng();
             let mut current_ts = SystemTime::now()
@@ -92,8 +95,11 @@ impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengi
                 current_ts += Duration::from_nanos(1).as_nanos() as i64;
             }
 
-            batch_state.remove(&metadata.batch);
-            cvar.notify_one();
+            if let Some((mut batch_state, cvar)) = batch_state_cvar {
+                batch_state.remove(&metadata.batch);
+                cvar.notify_one();
+            }
+
             values_to_bind
         };
 
@@ -236,7 +242,7 @@ mod tests {
         let another_pool = pool.clone();
 
         let task1 = tokio::spawn(async move {
-            cml.register(&metadata, data_1, &batch_state, &pool)
+            cml.register(&metadata, data_1, Some(&batch_state), &pool)
                 .await
                 .expect("Task 1 failed")
         });
@@ -245,7 +251,7 @@ mod tests {
                 .register(
                     &another_metadata,
                     data_2,
-                    &another_batch_state,
+                    Some(&another_batch_state),
                     &another_pool,
                 )
                 .await
