@@ -8,9 +8,7 @@ use std::future::Future;
 use std::time::{Duration, SystemTime};
 use taos::{taos_query::Manager, *};
 
-impl<D: IntoDsn + Clone + std::marker::Sync> Inference<Field, Value, i64, Manager<TaosBuilder>>
-    for TDengine<D>
-{
+impl<D: IntoDsn + Clone + Sync> Inference<Field, Value, i64, Manager<TaosBuilder>> for TDengine<D> {
     fn init_inference(
         &self,
         target_type: Field,

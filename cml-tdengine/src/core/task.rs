@@ -24,7 +24,7 @@ struct TaskInfo {
     ts: DateTime<Local>,
 }
 
-impl<D: IntoDsn + Clone + std::marker::Sync> Task<Field> for TDengine<D> {
+impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
     fn init_task(
         &self,
         optional_fields: Option<Vec<Field>>,

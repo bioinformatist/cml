@@ -9,9 +9,7 @@ use std::future::Future;
 use std::time::{Duration, SystemTime};
 use taos::{taos_query::Manager, *};
 
-impl<D: IntoDsn + Clone + std::marker::Sync> Register<Field, Value, Manager<TaosBuilder>>
-    for TDengine<D>
-{
+impl<D: IntoDsn + Clone + Sync> Register<Field, Value, Manager<TaosBuilder>> for TDengine<D> {
     fn init_register(
         &self,
         gt_type: Field,

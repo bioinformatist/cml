@@ -31,7 +31,7 @@ pub trait Inference<M, F, T, C: Manager> {
         batch_state: &SharedBatchState,
         pool: &Pool<C>,
         inference_fn: FN,
-    ) -> impl Future<Output = Result<()>> + Send
+    ) -> impl Future<Output = Result<()>>
     where
-        FN: FnOnce(&mut [NewSample<F>], &str, T) + Send;
+        FN: FnOnce(&mut [NewSample<F>], &str, T);
 }
