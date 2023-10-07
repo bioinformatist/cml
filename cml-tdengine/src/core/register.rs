@@ -40,90 +40,88 @@ impl<D: IntoDsn + Clone + std::marker::Sync> Register<Field, Value, Manager<Taos
         }
     }
 
-    fn register(
+    async fn register(
         &self,
         metadata: &Metadata<Value>,
         train_data: Vec<TrainData<Value>>,
         batch_state: Option<&SharedBatchState>,
         pool: &Pool<TaosBuilder>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        async move {
-            let taos = pool.get().await?;
-            taos.use_database("training_data").await?;
-            let mut stmt = Stmt::init(&taos).await?;
+    ) -> Result<()> {
+        let taos = pool.get().await?;
+        taos.use_database("training_data").await?;
+        let mut stmt = Stmt::init(&taos).await?;
 
-            let mut tags = match *metadata.model_update_time() {
-                Some(time) => vec![Value::BigInt(time)],
-                None => vec![Value::Null(Ty::BigInt)],
-            };
+        let mut tags = match *metadata.model_update_time() {
+            Some(time) => vec![Value::BigInt(time)],
+            None => vec![Value::Null(Ty::BigInt)],
+        };
 
-            if let Some(t) = &metadata.optional_tags() {
-                tags.extend_from_slice(t)
-            };
-            let tag_placeholder = get_placeholders(&tags);
+        if let Some(t) = &metadata.optional_tags() {
+            tags.extend_from_slice(t)
+        };
+        let tag_placeholder = get_placeholders(&tags);
 
-            let values_to_bind = {
-                let batch_state_cvar = batch_state.map(|batch_state| {
-                    let (lock, cvar) = &**batch_state;
-                    let mut batch_state = lock.lock().unwrap();
-                    while batch_state.contains(&metadata.batch) {
-                        batch_state = cvar.wait(batch_state).unwrap();
-                    }
-                    batch_state.insert(metadata.batch.clone());
-                    (batch_state, cvar)
-                });
+        let values_to_bind = {
+            let batch_state_cvar = batch_state.map(|batch_state| {
+                let (lock, cvar) = &**batch_state;
+                let mut batch_state = lock.lock().unwrap();
+                while batch_state.contains(&metadata.batch) {
+                    batch_state = cvar.wait(batch_state).unwrap();
+                }
+                batch_state.insert(metadata.batch.clone());
+                (batch_state, cvar)
+            });
 
-                let mut rng = rand::thread_rng();
-                let mut current_ts = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .expect("Clock may have gone backwards")
-                    .as_nanos() as i64;
+            let mut rng = rand::thread_rng();
+            let mut current_ts = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("Clock may have gone backwards")
+                .as_nanos() as i64;
 
-                let mut values_to_bind = Vec::<Vec<ColumnView>>::new();
-                for data in &train_data {
-                    let mut values = vec![
-                        ColumnView::from_nanos_timestamp(vec![current_ts]),
-                        ColumnView::from_bools(vec![rng.gen::<f32>() >= 0.2]),
-                        ColumnView::from(data.gt().clone()),
-                    ];
-                    if let Some(fields) = data.optional_fields() {
-                        values.append(
-                            &mut fields
-                                .iter()
-                                .map(|f| ColumnView::from(f.to_owned()))
-                                .collect::<Vec<ColumnView>>(),
-                        )
-                    }
-
-                    values_to_bind.push(values);
-                    current_ts += Duration::from_nanos(1).as_nanos() as i64;
+            let mut values_to_bind = Vec::<Vec<ColumnView>>::new();
+            for data in &train_data {
+                let mut values = vec![
+                    ColumnView::from_nanos_timestamp(vec![current_ts]),
+                    ColumnView::from_bools(vec![rng.gen::<f32>() >= 0.2]),
+                    ColumnView::from(data.gt().clone()),
+                ];
+                if let Some(fields) = data.optional_fields() {
+                    values.append(
+                        &mut fields
+                            .iter()
+                            .map(|f| ColumnView::from(f.to_owned()))
+                            .collect::<Vec<ColumnView>>(),
+                    )
                 }
 
-                if let Some((mut batch_state, cvar)) = batch_state_cvar {
-                    batch_state.remove(&metadata.batch);
-                    cvar.notify_one();
-                }
-
-                values_to_bind
-            };
-
-            let field_placeholder = get_placeholders(values_to_bind.first().unwrap());
-
-            stmt.prepare(&format!(
-                "INSERT INTO ? USING training_data TAGS ({}) VALUES ({})",
-                tag_placeholder, field_placeholder
-            ))
-            .await?;
-
-            stmt.set_tbname_tags(metadata.batch(), &tags).await?;
-
-            for values in values_to_bind {
-                stmt.bind(&values).await?;
+                values_to_bind.push(values);
+                current_ts += Duration::from_nanos(1).as_nanos() as i64;
             }
-            stmt.add_batch().await?;
-            stmt.execute().await?;
-            Ok(())
+
+            if let Some((mut batch_state, cvar)) = batch_state_cvar {
+                batch_state.remove(&metadata.batch);
+                cvar.notify_one();
+            }
+
+            values_to_bind
+        };
+
+        let field_placeholder = get_placeholders(values_to_bind.first().unwrap());
+
+        stmt.prepare(&format!(
+            "INSERT INTO ? USING training_data TAGS ({}) VALUES ({})",
+            tag_placeholder, field_placeholder
+        ))
+        .await?;
+
+        stmt.set_tbname_tags(metadata.batch(), &tags).await?;
+
+        for values in values_to_bind {
+            stmt.bind(&values).await?;
         }
+        stmt.add_batch().await?;
+        stmt.execute().await?;
+        Ok(())
     }
 }
 

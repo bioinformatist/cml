@@ -3,7 +3,7 @@
 //!
 
 #![feature(return_position_impl_trait_in_trait)]
-
+#![feature(async_fn_in_trait)]
 use anyhow::Result;
 use taos::taos_query::Manager;
 use taos::{sync::*, Pool};
