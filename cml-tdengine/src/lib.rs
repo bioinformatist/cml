@@ -35,7 +35,7 @@ impl<D: IntoDsn + Clone> TDengine<D> {
         Ok(taos_query::AsyncTBuilder::build(&TaosBuilder::from_dsn(self.dsn.clone())?).await?)
     }
 
-    fn build_sync(&self) -> Result<Taos> {
+    pub fn build_sync(&self) -> Result<Taos> {
         Ok(TaosBuilder::from_dsn(self.dsn.clone())?.build()?)
     }
 }
