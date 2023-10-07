@@ -6,14 +6,15 @@ use cml_core::{
 };
 use std::time::{Duration, SystemTime};
 use taos::{taos_query::Manager, *};
+use std::future::Future;
 
 impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for TDengine<D> {
-    async fn init_inference(
+    fn init_inference(
         &self,
         target_type: Field,
         optional_fields: Option<Vec<Field>>,
         optional_tags: Option<Vec<Field>>,
-    ) -> Result<()> {
+    ) -> impl Future<Output = Result<()>> + Send {
         let mut fields = vec![Field::new("ts", Ty::Timestamp, 8), target_type];
         if let Some(f) = optional_fields {
             fields.extend_from_slice(&f);
@@ -26,8 +27,10 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
 
         let stable = STable::new("inference", fields, tags);
 
-        let client = self.build().await?;
-        stable.init(&client, Some("inference")).await?;
+        async {
+            let client = self.build().await?;
+            stable.init(&client, Some("inference")).await?;
+        };
 
         Ok(())
     }

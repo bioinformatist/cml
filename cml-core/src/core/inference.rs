@@ -3,6 +3,7 @@ use anyhow::Result;
 use deadpool::managed::{Manager, Pool};
 use derive_getters::Getters;
 use typed_builder::TypedBuilder;
+use std::future::Future;
 
 #[derive(TypedBuilder, Getters)]
 pub struct NewSample<F> {
@@ -15,14 +16,14 @@ pub struct NewSample<F> {
 }
 
 pub trait Inference<M, F, T, C: Manager> {
-    async fn init_inference(
+    fn init_inference(
         &self,
         target_type: M,
         optional_fields: Option<Vec<M>>,
         optional_tags: Option<Vec<M>>,
-    ) -> Result<()>;
+    ) -> impl Future<Output = Result<()>> + Send;
 
-    async fn inference<FN>(
+    fn inference<FN>(
         &self,
         metadata: &Metadata<F>,
         available_status: &[&str],
