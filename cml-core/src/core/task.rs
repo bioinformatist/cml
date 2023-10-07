@@ -1,8 +1,8 @@
 use anyhow::Result;
 use chrono::Duration;
 use derive_getters::Getters;
-use typed_builder::TypedBuilder;
 use std::future::Future;
+use typed_builder::TypedBuilder;
 
 #[derive(TypedBuilder, Getters, Clone)]
 pub struct TaskConfig<'a> {

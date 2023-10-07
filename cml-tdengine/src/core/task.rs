@@ -8,8 +8,8 @@ use cml_core::{
     core::task::{Task, TaskConfig},
     Handler,
 };
+use std::future::Future;
 use taos::sync::*;
-
 #[derive(Deserialize)]
 struct BatchInfo {
     #[serde(alias = "tbname")]
@@ -24,12 +24,12 @@ struct TaskInfo {
     ts: DateTime<Local>,
 }
 
-impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
-    async fn init_task(
+impl<D: IntoDsn + Clone + std::marker::Sync> Task<Field> for TDengine<D> {
+    fn init_task(
         &self,
         optional_fields: Option<Vec<Field>>,
         optional_tags: Option<Vec<Field>>,
-    ) -> Result<()> {
+    ) -> impl Future<Output = Result<()>> + Send {
         let mut fields = vec![
             Field::new("ts", Ty::Timestamp, 8),
             Field::new("status", Ty::NChar, 16),
@@ -44,11 +44,11 @@ impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
         }
 
         let stable = STable::new("task", fields, tags);
-
-        let client = self.build().await?;
-        stable.init(&client, Some("task")).await?;
-
-        Ok(())
+        async {
+            let client = self.build().await?;
+            stable.init(&client, Some("task")).await?;
+            Ok(())
+        }
     }
 
     fn run<FN>(
@@ -162,7 +162,7 @@ mod tests {
     fn test_task_running_in_parallel() -> Result<()> {
         let cml = TDengine::from_dsn("taos://");
         let taos = cml.build_sync()?;
-        let working_status = ["TRAIN", "EVAL"];
+        let working_status = ["TRAIN".to_string(), "EVAL".to_string()];
         let config: TaskConfig = TaskConfig::builder()
             .min_start_count(1)
             .min_update_count(1)
@@ -314,37 +314,6 @@ mod tests {
 //     };
 //     use burn_autodiff::ADBackendDecorator;
 //     use burn_ndarray::{NdArrayBackend, NdArrayDevice};
-
-//     #[tokio::test]
-//     async fn test_task_init() -> Result<()> {
-//         let cml = TDengine::from_dsn("taos://");
-//         let taos = cml.build().await?;
-
-//         taos::AsyncQueryable::exec(&taos, "DROP DATABASE IF EXISTS task").await?;
-
-//         let db = DatabaseBuilder::default()
-//             .name("task")
-//             .duration(30)
-//             .keep(365)
-//             .replica(ReplicaNum::NoReplica)
-//             .cache_model(CacheModel::None)
-//             .single_stable(SingleSTable::True)
-//             .build()?;
-//         db.init(&cml.build().await?, None).await?;
-
-//         cml.init_task(None, None).await?;
-
-//         assert_eq!(
-//             taos_query::AsyncFetchable::to_records(
-//                 &mut taos::AsyncQueryable::query(&taos, "SHOW task.STABLES").await?
-//             )
-//             .await?[0][0],
-//             taos::Value::VarChar("task".to_owned())
-//         );
-
-//         taos::AsyncQueryable::exec(&taos, "DROP DATABASE IF EXISTS task").await?;
-//         Ok(())
-//     }
 
 //     #[test]
 //     fn test_task_running_in_parallel() -> Result<()> {

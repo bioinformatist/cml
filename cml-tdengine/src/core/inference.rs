@@ -4,11 +4,13 @@ use cml_core::{
     core::inference::{Inference, NewSample},
     get_placeholders, Handler, Metadata, SharedBatchState,
 };
+use std::future::Future;
 use std::time::{Duration, SystemTime};
 use taos::{taos_query::Manager, *};
-use std::future::Future;
 
-impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for TDengine<D> {
+impl<D: IntoDsn + Clone + std::marker::Sync> Inference<Field, Value, i64, Manager<TaosBuilder>>
+    for TDengine<D>
+{
     fn init_inference(
         &self,
         target_type: Field,
@@ -30,12 +32,11 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
         async {
             let client = self.build().await?;
             stable.init(&client, Some("inference")).await?;
-        };
-
-        Ok(())
+            Ok(())
+        }
     }
 
-    async fn inference<FN>(
+    fn inference<FN>(
         &self,
         metadata: &Metadata<Value>,
         available_status: &[&str],
@@ -43,94 +44,97 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
         batch_state: &SharedBatchState,
         pool: &Pool<TaosBuilder>,
         inference_fn: FN,
-    ) -> Result<()>
+    ) -> impl Future<Output = Result<()>> + Send
     where
-        FN: FnOnce(&mut [NewSample<Value>], &str, i64),
+        FN: FnOnce(&mut [NewSample<Value>], &str, i64) + std::marker::Send,
     {
-        let taos = pool.get().await?;
-        let mut stmt = Stmt::init(&taos).await?;
-        taos.use_database("task").await?;
-        let last_task_time = taos
-            .query_one(format!(
-                "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({})",
-                metadata.batch(),
-                available_status
-                    .iter()
-                    .map(|s| format!("'{}'", s))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            ))
-            .await?
-            .unwrap_or_else(|| panic!("There is no task in batch: {}", metadata.batch()));
-        inference_fn(&mut data, metadata.batch(), last_task_time);
-        taos.use_database("inference").await?;
-        let mut tags = match *metadata.model_update_time() {
-            Some(time) => vec![Value::BigInt(time)],
-            None => vec![Value::Null(Ty::BigInt)],
-        };
-        if let Some(t) = &metadata.optional_tags() {
-            tags.extend_from_slice(t)
-        };
-        let tag_placeholder = get_placeholders(&tags);
-        let null = ColumnView::null(
-            1,
-            taos.query("SELECT * FROM inference LIMIT 0")
+        async {
+            let taos = pool.get().await?;
+            let mut stmt = Stmt::init(&taos).await?;
+            taos.use_database("task").await?;
+            let last_task_time = taos
+                .query_one(format!(
+                    "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({})",
+                    metadata.batch(),
+                    available_status
+                        .iter()
+                        .map(|s| format!("'{}'", s))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                ))
                 .await?
-                .fields()
-                .get(1)
-                .unwrap()
-                .ty(),
-        );
-        let values_to_bind = {
-            let (lock, cvar) = &**batch_state;
-            let mut batch_state = lock.lock().unwrap();
-            while batch_state.contains(&metadata.batch) {
-                batch_state = cvar.wait(batch_state).unwrap();
-            }
-            batch_state.insert(metadata.batch.clone());
-            let mut current_ts = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("Clock may have gone backwards")
-                .as_nanos() as i64;
+                .unwrap_or_else(|| panic!("There is no task in batch: {}", metadata.batch()));
+            inference_fn(&mut data, metadata.batch(), last_task_time);
+            taos.use_database("inference").await?;
+            let mut tags = match *metadata.model_update_time() {
+                Some(time) => vec![Value::BigInt(time)],
+                None => vec![Value::Null(Ty::BigInt)],
+            };
+            if let Some(t) = &metadata.optional_tags() {
+                tags.extend_from_slice(t)
+            };
+            let tag_placeholder = get_placeholders(&tags);
+            let null = ColumnView::null(
+                1,
+                taos.query("SELECT * FROM inference LIMIT 0")
+                    .await?
+                    .fields()
+                    .get(1)
+                    .unwrap()
+                    .ty(),
+            );
+            let values_to_bind = {
+                let (lock, cvar) = &**batch_state;
+                let mut batch_state = lock.lock().unwrap();
+                while batch_state.contains(&metadata.batch) {
+                    batch_state = cvar.wait(batch_state).unwrap();
+                }
+                batch_state.insert(metadata.batch.clone());
+                let mut current_ts = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .expect("Clock may have gone backwards")
+                    .as_nanos() as i64;
 
-            let mut values_to_bind = Vec::<Vec<ColumnView>>::new();
-            for sample in data {
-                let output = match sample.output() {
-                    Some(value) => ColumnView::from(value.clone()),
-                    None => null.clone(),
-                };
-                let mut values = vec![ColumnView::from_nanos_timestamp(vec![current_ts]), output];
-                if let Some(fields) = sample.optional_fields() {
-                    values.append(
-                        &mut fields
-                            .iter()
-                            .map(|f| ColumnView::from(f.to_owned()))
-                            .collect::<Vec<ColumnView>>(),
-                    )
+                let mut values_to_bind = Vec::<Vec<ColumnView>>::new();
+                for sample in data {
+                    let output = match sample.output() {
+                        Some(value) => ColumnView::from(value.clone()),
+                        None => null.clone(),
+                    };
+                    let mut values =
+                        vec![ColumnView::from_nanos_timestamp(vec![current_ts]), output];
+                    if let Some(fields) = sample.optional_fields() {
+                        values.append(
+                            &mut fields
+                                .iter()
+                                .map(|f| ColumnView::from(f.to_owned()))
+                                .collect::<Vec<ColumnView>>(),
+                        )
+                    }
+
+                    values_to_bind.push(values);
+                    current_ts += Duration::from_nanos(1).as_nanos() as i64;
                 }
 
-                values_to_bind.push(values);
-                current_ts += Duration::from_nanos(1).as_nanos() as i64;
+                batch_state.remove(&metadata.batch);
+                cvar.notify_one();
+                values_to_bind
+            };
+            let field_placeholder = get_placeholders(values_to_bind.first().unwrap());
+            stmt.prepare(&format!(
+                "INSERT INTO ? USING inference TAGS ({}) VALUES ({})",
+                tag_placeholder, field_placeholder
+            ))
+            .await?;
+
+            stmt.set_tbname_tags(metadata.batch(), &tags).await?;
+            for values in values_to_bind {
+                stmt.bind(&values).await?;
             }
-
-            batch_state.remove(&metadata.batch);
-            cvar.notify_one();
-            values_to_bind
-        };
-        let field_placeholder = get_placeholders(values_to_bind.first().unwrap());
-        stmt.prepare(&format!(
-            "INSERT INTO ? USING inference TAGS ({}) VALUES ({})",
-            tag_placeholder, field_placeholder
-        ))
-        .await?;
-
-        stmt.set_tbname_tags(metadata.batch(), &tags).await?;
-        for values in values_to_bind {
-            stmt.bind(&values).await?;
+            stmt.add_batch().await?;
+            stmt.execute().await?;
+            Ok(())
         }
-        stmt.add_batch().await?;
-        stmt.execute().await?;
-        Ok(())
     }
 }
 
