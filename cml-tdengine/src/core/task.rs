@@ -158,10 +158,10 @@ mod tests {
     use std::{env, fs, io::prelude::*};
     use tempfile::NamedTempFile;
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_task_running_in_parallel() -> Result<()> {
+    #[test]
+    fn test_task_running_in_parallel() -> Result<()> {
         let cml = TDengine::from_dsn("taos://");
-        let taos = cml.build_sync().unwrap();
+        let taos = cml.build_sync()?;
         let working_status = ["TRAIN", "EVAL"];
         let config: TaskConfig = TaskConfig::builder()
             .min_start_count(1)
@@ -226,7 +226,7 @@ mod tests {
         let model_dir = env::temp_dir().join("model_dir");
         fs::create_dir_all(&model_dir)?;
         let build_fn = |batch: &str| -> Result<()> {
-            let taos = TDengine::from_dsn("taos://").build_sync().unwrap();
+            let taos = TDengine::from_dsn("taos://").build_sync()?;
             taos.exec(format!(
                 "INSERT INTO task.`{}`
                 USING task.task
@@ -236,16 +236,14 @@ mod tests {
             ))?;
             // get data for building model
             let training_data: Vec<String> = taos
-                .query(format!("SELECT data_path FROM training_data.`{}`", batch))
-                .unwrap()
+                .query(format!("SELECT data_path FROM training_data.`{}`", batch))?
                 .deserialize()
                 .try_collect()?;
             let last_ts: i64 = taos
                 .query_one(format!(
                     "SELECT LAST(ts) FROM task.`{}` WHERE status IN ('TRAIN')",
                     batch
-                ))
-                .unwrap()
+                ))?
                 .unwrap();
             let model_dir = env::temp_dir().join("model_dir");
             // build model
@@ -273,11 +271,10 @@ mod tests {
         };
         cml.run(config, build_fn, build_fn)?;
         let records = taos
-            .query_one("SELECT COUNT(*) FROM task.task")
-            .unwrap()
+            .query_one("SELECT COUNT(*) FROM task.task")?
             .unwrap_or(0);
         assert_eq!(4, records);
-        let model_file_count = fs::read_dir(&model_dir).unwrap().count();
+        let model_file_count = fs::read_dir(&model_dir)?.count();
         assert_eq!(2, model_file_count);
         fs::remove_dir_all(model_dir)?;
         taos.exec("DROP DATABASE IF EXISTS training_data")?;

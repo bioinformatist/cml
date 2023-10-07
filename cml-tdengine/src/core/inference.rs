@@ -233,8 +233,7 @@ mod tests {
         .await?;
 
         let model_update_time = (SystemTime::now() - Duration::from_secs(86400))
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
+            .duration_since(SystemTime::UNIX_EPOCH)?
             .as_nanos() as i64;
         let batch_meta_1: Metadata<Value> = Metadata::builder()
             .model_update_time(model_update_time)
