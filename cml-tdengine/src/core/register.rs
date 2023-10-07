@@ -5,16 +5,17 @@ use cml_core::{
     get_placeholders, Handler, Metadata, SharedBatchState,
 };
 use rand::Rng;
+use std::future::Future;
 use std::time::{Duration, SystemTime};
 use taos::{taos_query::Manager, *};
 
-impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengine<D> {
-    async fn init_register(
+impl<D: IntoDsn + Clone + Sync> Register<Field, Value, Manager<TaosBuilder>> for TDengine<D> {
+    fn init_register(
         &self,
         gt_type: Field,
         optional_fields: Option<Vec<Field>>,
         optional_tags: Option<Vec<Field>>,
-    ) -> Result<()> {
+    ) -> impl Future<Output = Result<()>> + Send {
         let mut fields = vec![
             Field::new("ts", Ty::Timestamp, 8),
             Field::new("is_train", Ty::Bool, 1),
@@ -30,11 +31,11 @@ impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengi
         }
 
         let stable = STable::new("training_data", fields, tags);
-
-        let client = self.build().await?;
-        stable.init(&client, Some("training_data")).await?;
-
-        Ok(())
+        async {
+            let client = self.build().await?;
+            stable.init(&client, Some("training_data")).await?;
+            Ok(())
+        }
     }
 
     async fn register(

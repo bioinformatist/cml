@@ -2,8 +2,8 @@ use crate::{metadata::Metadata, SharedBatchState};
 use anyhow::Result;
 use deadpool::managed::{Manager, Pool};
 use derive_getters::Getters;
-use typed_builder::TypedBuilder;
 use std::future::Future;
+use typed_builder::TypedBuilder;
 
 #[derive(TypedBuilder, Getters)]
 pub struct NewSample<F> {
@@ -31,7 +31,7 @@ pub trait Inference<M, F, T, C: Manager> {
         batch_state: &SharedBatchState,
         pool: &Pool<C>,
         inference_fn: FN,
-    ) -> Result<()>
+    ) -> impl Future<Output = Result<()>>
     where
         FN: FnOnce(&mut [NewSample<F>], &str, T);
 }

@@ -8,8 +8,8 @@ use cml_core::{
     core::task::{Task, TaskConfig},
     Handler,
 };
+use std::future::Future;
 use taos::sync::*;
-
 #[derive(Deserialize)]
 struct BatchInfo {
     #[serde(alias = "tbname")]
@@ -24,12 +24,12 @@ struct TaskInfo {
     ts: DateTime<Local>,
 }
 
-impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
-    async fn init_task(
+impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
+    fn init_task(
         &self,
         optional_fields: Option<Vec<Field>>,
         optional_tags: Option<Vec<Field>>,
-    ) -> Result<()> {
+    ) -> impl Future<Output = Result<()>> + Send {
         let mut fields = vec![
             Field::new("ts", Ty::Timestamp, 8),
             Field::new("status", Ty::NChar, 16),
@@ -44,11 +44,11 @@ impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
         }
 
         let stable = STable::new("task", fields, tags);
-
-        let client = self.build().await?;
-        stable.init(&client, Some("task")).await?;
-
-        Ok(())
+        async {
+            let client = self.build().await?;
+            stable.init(&client, Some("task")).await?;
+            Ok(())
+        }
     }
 
     fn run<FN>(
@@ -152,9 +152,8 @@ impl<D: IntoDsn + Clone> Task<Field> for TDengine<D> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{CacheModel, Database, ReplicaNum, SingleSTable};
-
     use super::*;
+    use crate::{CacheModel, Database, ReplicaNum, SingleSTable};
     use chrono::Duration;
     use cml_core::core::task::{Task, TaskConfig};
     use std::{env, fs, io::prelude::*};
@@ -191,11 +190,11 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_task_running_in_parallel() -> Result<()> {
-        let cml: TDengine<&str> = TDengine::from_dsn("taos://");
-        let taos = cml.build_sync().unwrap();
-        let working_status = ["TRAIN".to_owned(), "EVAL".to_owned()];
+    #[test]
+    fn test_task_running_in_parallel() -> Result<()> {
+        let cml = TDengine::from_dsn("taos://");
+        let taos = cml.build_sync()?;
+        let working_status = ["TRAIN".to_string(), "EVAL".to_string()];
         let config: TaskConfig = TaskConfig::builder()
             .min_start_count(1)
             .min_update_count(1)
@@ -259,7 +258,7 @@ mod tests {
         let model_dir = env::temp_dir().join("model_dir");
         fs::create_dir_all(&model_dir)?;
         let build_fn = |batch: &str| -> Result<()> {
-            let taos = TDengine::from_dsn("taos://").build_sync().unwrap();
+            let taos = TDengine::from_dsn("taos://").build_sync()?;
             taos.exec(format!(
                 "INSERT INTO task.`{}`
                 USING task.task
@@ -269,16 +268,14 @@ mod tests {
             ))?;
             // get data for building model
             let training_data: Vec<String> = taos
-                .query(format!("SELECT data_path FROM training_data.`{}`", batch))
-                .unwrap()
+                .query(format!("SELECT data_path FROM training_data.`{}`", batch))?
                 .deserialize()
                 .try_collect()?;
             let last_ts: i64 = taos
                 .query_one(format!(
                     "SELECT LAST(ts) FROM task.`{}` WHERE status IN ('TRAIN')",
                     batch
-                ))
-                .unwrap()
+                ))?
                 .unwrap();
             let model_dir = env::temp_dir().join("model_dir");
             // build model
@@ -306,11 +303,10 @@ mod tests {
         };
         cml.run(config, build_fn, build_fn)?;
         let records = taos
-            .query_one("SELECT COUNT(*) FROM task.task")
-            .unwrap()
+            .query_one("SELECT COUNT(*) FROM task.task")?
             .unwrap_or(0);
         assert_eq!(4, records);
-        let model_file_count = fs::read_dir(&model_dir).unwrap().count();
+        let model_file_count = fs::read_dir(&model_dir)?.count();
         assert_eq!(2, model_file_count);
         fs::remove_dir_all(model_dir)?;
         taos.exec("DROP DATABASE IF EXISTS training_data")?;

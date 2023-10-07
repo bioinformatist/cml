@@ -4,11 +4,11 @@ use cml_core::{
     core::inference::{Inference, NewSample},
     get_placeholders, Handler, Metadata, SharedBatchState,
 };
+use std::future::Future;
 use std::time::{Duration, SystemTime};
 use taos::{taos_query::Manager, *};
-use std::future::Future;
 
-impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for TDengine<D> {
+impl<D: IntoDsn + Clone + Sync> Inference<Field, Value, i64, Manager<TaosBuilder>> for TDengine<D> {
     fn init_inference(
         &self,
         target_type: Field,
@@ -30,9 +30,8 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
         async {
             let client = self.build().await?;
             stable.init(&client, Some("inference")).await?;
-        };
-
-        Ok(())
+            Ok(())
+        }
     }
 
     async fn inference<FN>(
@@ -236,8 +235,7 @@ mod tests {
         .await?;
 
         let model_update_time = (SystemTime::now() - Duration::from_secs(86400))
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
+            .duration_since(SystemTime::UNIX_EPOCH)?
             .as_nanos() as i64;
         let batch_meta_1: Metadata<Value> = Metadata::builder()
             .model_update_time(model_update_time)
