@@ -153,10 +153,42 @@ impl<D: IntoDsn + Clone + std::marker::Sync> Task<Field> for TDengine<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{CacheModel, Database, ReplicaNum, SingleSTable};
     use chrono::Duration;
     use cml_core::core::task::{Task, TaskConfig};
     use std::{env, fs, io::prelude::*};
     use tempfile::NamedTempFile;
+
+    #[tokio::test]
+    async fn test_task_init() -> Result<()> {
+        let cml = TDengine::from_dsn("taos://");
+        let taos = cml.build().await?;
+
+        taos::AsyncQueryable::exec(&taos, "DROP DATABASE IF EXISTS task").await?;
+
+        let db = Database::builder()
+            .name("task")
+            .duration(30)
+            .keep(365)
+            .replica(ReplicaNum::NoReplica)
+            .cache_model(CacheModel::None)
+            .single_stable(SingleSTable::True)
+            .build();
+        db.init(&cml.build().await?, None).await?;
+
+        cml.init_task(None, None).await?;
+
+        assert_eq!(
+            taos_query::AsyncFetchable::to_records(
+                &mut taos::AsyncQueryable::query(&taos, "SHOW task.STABLES").await?
+            )
+            .await?[0][0],
+            taos::Value::VarChar("task".to_owned())
+        );
+
+        taos::AsyncQueryable::exec(&taos, "DROP DATABASE IF EXISTS task").await?;
+        Ok(())
+    }
 
     #[test]
     fn test_task_running_in_parallel() -> Result<()> {
