@@ -16,8 +16,8 @@ pub trait Register<M, F, C: Manager> {
     fn init_register(
         &self,
         gt_type: M,
+        tag_name: &str,
         optional_fields: Option<Vec<M>>,
-        optional_tags: Option<Vec<M>>,
     ) -> impl Future<Output = Result<()>> + Send;
 
     fn register(

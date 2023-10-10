@@ -13,8 +13,8 @@ impl<D: IntoDsn + Clone + Sync> Register<Field, Value, Manager<TaosBuilder>> for
     fn init_register(
         &self,
         gt_type: Field,
+        tag_name: &str,
         optional_fields: Option<Vec<Field>>,
-        optional_tags: Option<Vec<Field>>,
     ) -> impl Future<Output = Result<()>> + Send {
         let mut fields = vec![
             Field::new("ts", Ty::Timestamp, 8),
@@ -25,11 +25,7 @@ impl<D: IntoDsn + Clone + Sync> Register<Field, Value, Manager<TaosBuilder>> for
             fields.extend_from_slice(&f);
         }
 
-        let mut tags = vec![Field::new("model_update_time", Ty::Timestamp, 8)];
-        if let Some(t) = optional_tags {
-            tags.extend_from_slice(&t);
-        }
-
+        let tags = vec![Field::new(tag_name, Ty::Timestamp, 518)];
         let stable = STable::new("training_data", fields, tags);
         async {
             let client = self.build().await?;
@@ -156,13 +152,10 @@ mod tests {
 
         cml.init_register(
             Field::new("gt", Ty::Float, 8),
+            "mmp",
             Some(vec![
                 Field::new("fucking_field_1", Ty::VarChar, 8),
                 Field::new("fucking_field_2", Ty::TinyInt, 8),
-            ]),
-            Some(vec![
-                Field::new("fucking_tag_1", Ty::VarChar, 8),
-                Field::new("fucking_tag_2", Ty::TinyInt, 8),
             ]),
         )
         .await?;

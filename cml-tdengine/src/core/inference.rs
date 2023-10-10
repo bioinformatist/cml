@@ -12,19 +12,15 @@ impl<D: IntoDsn + Clone + Sync> Inference<Field, Value, i64, Manager<TaosBuilder
     fn init_inference(
         &self,
         target_type: Field,
+        tag_name: &str,
         optional_fields: Option<Vec<Field>>,
-        optional_tags: Option<Vec<Field>>,
     ) -> impl Future<Output = Result<()>> + Send {
         let mut fields = vec![Field::new("ts", Ty::Timestamp, 8), target_type];
         if let Some(f) = optional_fields {
             fields.extend_from_slice(&f);
         }
 
-        let mut tags = vec![Field::new("model_update_time", Ty::Timestamp, 8)];
-        if let Some(t) = optional_tags {
-            tags.extend_from_slice(&t);
-        }
-
+        let tags = vec![Field::new(tag_name, Ty::Json, 518)];
         let stable = STable::new("inference", fields, tags);
 
         async {
@@ -169,7 +165,7 @@ mod tests {
 
         db.init(&cml.build().await?, None).await?;
 
-        cml.init_inference(Field::new("output", Ty::Float, 8), None, None)
+        cml.init_inference(Field::new("output", Ty::Float, 8), "mmp", None)
             .await?;
 
         assert_eq!(

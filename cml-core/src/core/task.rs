@@ -15,8 +15,8 @@ pub struct TaskConfig<'a> {
 pub trait Task<M> {
     fn init_task(
         &self,
+        tag_name: &str,
         optional_fields: Option<Vec<M>>,
-        optional_tags: Option<Vec<M>>,
     ) -> impl Future<Output = Result<()>> + Send;
 
     fn run<FN>(

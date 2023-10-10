@@ -27,8 +27,8 @@ struct TaskInfo {
 impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
     fn init_task(
         &self,
+        tag_name: &str,
         optional_fields: Option<Vec<Field>>,
-        optional_tags: Option<Vec<Field>>,
     ) -> impl Future<Output = Result<()>> + Send {
         let mut fields = vec![
             Field::new("ts", Ty::Timestamp, 8),
@@ -38,11 +38,7 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
             fields.extend_from_slice(&f);
         }
 
-        let mut tags = vec![Field::new("model_update_time", Ty::Timestamp, 8)];
-        if let Some(t) = optional_tags {
-            tags.extend_from_slice(&t);
-        }
-
+        let tags = vec![Field::new(tag_name, Ty::Timestamp, 518)];
         let stable = STable::new("task", fields, tags);
         async {
             let client = self.build().await?;
@@ -176,7 +172,7 @@ mod tests {
             .build();
         db.init(&cml.build().await?, None).await?;
 
-        cml.init_task(None, None).await?;
+        cml.init_task("mmp", None).await?;
 
         assert_eq!(
             taos_query::AsyncFetchable::to_records(

@@ -19,8 +19,8 @@ pub trait Inference<M, F, T, C: Manager> {
     fn init_inference(
         &self,
         target_type: M,
+        tag_name: &str,
         optional_fields: Option<Vec<M>>,
-        optional_tags: Option<Vec<M>>,
     ) -> impl Future<Output = Result<()>> + Send;
 
     fn inference<FN>(
