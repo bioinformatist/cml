@@ -258,14 +258,14 @@ mod tests {
             .unwrap_or(0);
         assert_eq!(4, records);
         // check tag count
-        let mut result = taos
-            .query(format!(
-                "SHOW TAGS FROM training_data.`{}`",
+        let tag_records = taos
+            .query_one(format!(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.INS_TAGS WHERE db_name = 'training_data' and table_name = '{}'",
                 another_metadata_check.batch()
             ))
-            .await?;
-        let records = result.to_records().await?.len();
-        assert_eq!(3, records);
+            .await?
+            .unwrap_or(0);
+        assert_eq!(3, tag_records);
 
         taos.exec("DROP DATABASE IF EXISTS training_data").await?;
         Ok(())
