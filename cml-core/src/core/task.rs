@@ -22,6 +22,7 @@ pub trait Task<M> {
     fn run<FN>(
         &self,
         task_config: TaskConfig,
+        available_status: &[&str],
         build_from_scratch_fn: FN,
         fining_build_fn: FN,
     ) -> Result<()>

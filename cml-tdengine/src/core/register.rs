@@ -25,7 +25,7 @@ impl<D: IntoDsn + Clone + Sync> Register<Field, Value, Manager<TaosBuilder>> for
             fields.extend_from_slice(&f);
         }
 
-        let mut tags = vec![Field::new("model_update_time", Ty::Timestamp, 8)];
+        let mut tags = vec![Field::new("train_start_time", Ty::Timestamp, 8)];
         if let Some(t) = optional_tags {
             tags.extend_from_slice(&t);
         }
@@ -49,11 +49,7 @@ impl<D: IntoDsn + Clone + Sync> Register<Field, Value, Manager<TaosBuilder>> for
         taos.use_database("training_data").await?;
         let mut stmt = Stmt::init(&taos).await?;
 
-        let mut tags = match *metadata.model_update_time() {
-            Some(time) => vec![Value::BigInt(time)],
-            None => vec![Value::Null(Ty::BigInt)],
-        };
-
+        let mut tags = vec![Value::Null(Ty::Timestamp)];
         if let Some(t) = &metadata.optional_tags() {
             tags.extend_from_slice(t)
         };
@@ -199,14 +195,8 @@ mod tests {
 
         let batch_state = Arc::new((Mutex::new(HashSet::new()), Condvar::new()));
 
-        let model_update_time = (SystemTime::now() - Duration::from_secs(86400))
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as i64;
-
         let metadata = Arc::new(
             Metadata::builder()
-                .model_update_time(model_update_time)
                 .batch("Fuck_1".to_owned())
                 .optional_tags(vec![
                     Value::VarChar("fuck_1".to_string()),
@@ -241,6 +231,7 @@ mod tests {
         let another_metadata = metadata.clone();
         let another_batch_state = batch_state.clone();
         let another_pool = pool.clone();
+        let another_metadata_check = metadata.clone();
 
         let task1 = tokio::spawn(async move {
             cml.register(&metadata, data_1, Some(&batch_state), &pool)
@@ -266,6 +257,15 @@ mod tests {
             .await?
             .unwrap_or(0);
         assert_eq!(4, records);
+        // check tag count
+        let mut result = taos
+            .query(format!(
+                "SHOW TAGS FROM training_data.`{}`",
+                another_metadata_check.batch()
+            ))
+            .await?;
+        let records = result.to_records().await?.len();
+        assert_eq!(3, records);
 
         taos.exec("DROP DATABASE IF EXISTS training_data").await?;
         Ok(())
