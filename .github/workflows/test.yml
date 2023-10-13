@@ -27,7 +27,6 @@ jobs:
         image: tdengine/tdengine:${{ needs.get-taos-version.outputs.taos-version }}
         ports:
           - 6030:6030
-          - 6041:6041
     
     steps:
       - uses: actions/checkout@v3

@@ -199,7 +199,7 @@ mod tests {
         cml.init_task(None, None).await?;
 
         assert_eq!(
-            taos_query::AsyncFetchable::to_records(
+            taos::taos_query::AsyncFetchable::to_records(
                 &mut taos::AsyncQueryable::query(&taos, "SHOW task.STABLES").await?
             )
             .await?[0][0],
@@ -354,13 +354,13 @@ mod tests {
                 ],
                 vec![
                     Value::VarChar("FUCK".to_string()),
-                    Value::Timestamp(taos_query::common::Timestamp::Nanoseconds(
+                    Value::Timestamp(taos::taos_query::common::Timestamp::Nanoseconds(
                         the_last_success_task_time
                     ))
                 ],
                 vec![
                     Value::VarChar("FUCK".to_string()),
-                    Value::Timestamp(taos_query::common::Timestamp::Nanoseconds(
+                    Value::Timestamp(taos::taos_query::common::Timestamp::Nanoseconds(
                         the_last_success_task_time
                     ))
                 ]
