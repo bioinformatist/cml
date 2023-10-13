@@ -24,30 +24,6 @@ struct TaskInfo {
     ts: DateTime<Local>,
 }
 
-fn update_train_start_time(taos: &Taos, available_status: &[&str]) {
-    let records = taos
-        .query(format!(
-            "SELECT TBNAME, LAST(ts) FROM task.task WHERE status IN ({}) GROUP BY TBNAME",
-            available_status
-                .iter()
-                .map(|s| format!("'{}'", s))
-                .collect::<Vec<String>>()
-                .join(", ")
-        ))
-        .unwrap()
-        .to_rows_vec()
-        .unwrap();
-    println!("{:?}", records);
-    records.iter().for_each(|record| {
-        taos.exec(format!(
-            "ALTER TABLE training_data.`{}` SET TAG train_start_time='{}'",
-            record.first().unwrap(),
-            record.last().unwrap()
-        ))
-        .unwrap();
-    });
-}
-
 impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
     fn init_task(
         &self,
@@ -78,7 +54,6 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
     fn run<FN>(
         &self,
         task_config: TaskConfig,
-        available_status: &[&str],
         build_from_scratch_fn: FN,
         fining_build_fn: FN,
     ) -> Result<()>
@@ -86,8 +61,27 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
         FN: Fn(&str) -> Result<()> + Send + Sync,
     {
         let taos = self.build_sync().unwrap();
-        update_train_start_time(&taos, available_status);
-
+        let records = taos
+            .query(format!(
+                "SELECT TBNAME, LAST(ts) FROM task.task WHERE status IN ({}) GROUP BY TBNAME",
+                task_config
+                    .available_status()
+                    .iter()
+                    .map(|s| format!("'{}'", s))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ))
+            .unwrap()
+            .to_rows_vec()
+            .unwrap();
+        records.iter().for_each(|record| {
+            taos.exec(format!(
+                "ALTER TABLE training_data.`{}` SET TAG train_start_time='{}'",
+                record.first().unwrap(),
+                record.last().unwrap()
+            ))
+            .unwrap();
+        });
         let mut batch_info: Vec<BatchInfo> = taos
             .query("SELECT DISTINCT TBNAME, train_start_time FROM training_data.training_data")?
             .deserialize()
@@ -217,95 +211,16 @@ mod tests {
     }
 
     #[test]
-    fn test_update_train_start_time() -> Result<()> {
-        let cml = TDengine::from_dsn("taos://");
-        let taos = cml.build_sync()?;
-        let available_status = ["SUCCESS"];
-        taos.exec("DROP DATABASE IF EXISTS training_data")?;
-        taos.exec("DROP DATABASE IF EXISTS task")?;
-
-        taos.exec("CREATE DATABASE IF NOT EXISTS training_data PRECISION 'ns'")?;
-        taos.exec("CREATE DATABASE IF NOT EXISTS task PRECISION 'ns'")?;
-
-        taos.exec(
-            "CREATE STABLE IF NOT EXISTS training_data.training_data
-            (ts TIMESTAMP, is_train BOOL, gt FLOAT)
-            TAGS (train_start_time TIMESTAMP)",
-        )?;
-        taos.exec(
-            "CREATE STABLE IF NOT EXISTS task.task
-            (ts TIMESTAMP, status BINARY(8))
-            TAGS (model_update_time TIMESTAMP)",
-        )?;
-
-        taos.exec(
-            "INSERT INTO training_data.`FUCK`
-            USING training_data.training_data
-            TAGS (null)
-            VALUES (NOW, 'true', 1.0)",
-        )?;
-        taos.exec(
-            "INSERT INTO task.`FUCK`
-            USING task.task
-            TAGS (null)
-            VALUES (NOW, 'SUCCESS')",
-        )?;
-
-        taos.exec(
-            "INSERT INTO training_data.`FUCK8`
-            USING training_data.training_data
-            TAGS (null)
-            VALUES (NOW, 'true', 1.0)",
-        )?;
-        taos.exec(
-            "INSERT INTO task.`FUCK8`
-            USING task.task
-            TAGS (null)
-            VALUES (NOW, 'TRAIN')",
-        )?;
-
-        update_train_start_time(&taos, &available_status);
-        let last_task_time = taos
-            .query_one(format!(
-                "SELECT LAST(ts) FROM task.`FUCK` WHERE status IN ({})",
-                available_status
-                    .iter()
-                    .map(|s| format!("'{}'", s))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            ))?
-            .unwrap();
-
-        let mut result = taos
-            .query("SELECT TBNAME,train_start_time FROM training_data.training_data ORDER BY train_start_time ASC")?;
-        let records = result.to_rows_vec()?;
-        assert_eq!(
-            vec![
-                vec![
-                    Value::VarChar("FUCK8".to_string()),
-                    Value::Null(Ty::Timestamp)
-                ],
-                vec![
-                    Value::VarChar("FUCK".to_string()),
-                    Value::Timestamp(taos_query::common::Timestamp::Nanoseconds(last_task_time))
-                ]
-            ],
-            records
-        );
-        taos.exec("DROP DATABASE IF EXISTS training_data")?;
-        taos.exec("DROP DATABASE IF EXISTS task")?;
-        Ok(())
-    }
-
-    #[test]
     fn test_task_running_in_parallel() -> Result<()> {
         let cml = TDengine::from_dsn("taos://");
         let taos = cml.build_sync()?;
         let working_status = ["TRAIN".to_string(), "EVAL".to_string()];
+        let available_status = ["SUCCESS".to_string()];
         let config: TaskConfig = TaskConfig::builder()
             .min_start_count(1)
             .min_update_count(1)
             .working_status(&working_status)
+            .available_status(&available_status)
             .limit_time(Duration::days(2))
             .build();
         let mut training_data_file1 = NamedTempFile::new()?;
@@ -344,7 +259,7 @@ mod tests {
             "INSERT INTO task.`FUCK`
             USING task.task
             TAGS ('2022-08-08 18:18:18.518')
-            VALUES (NOW -3d, 'TRAIN')",
+            VALUES (NOW -3d, 'SUCCESS')",
         )?;
 
         taos.exec(format!(
@@ -362,6 +277,19 @@ mod tests {
             TAGS (null)
             VALUES (NOW -3d, 'TRAIN')",
         )?;
+
+        let the_last_success_task_time = taos
+            .query_one(format!(
+                "SELECT LAST(ts) FROM task.`FUCK` WHERE status IN ({})",
+                config
+                    .available_status()
+                    .iter()
+                    .map(|s| format!("'{}'", s))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ))?
+            .unwrap();
+
         let model_dir = env::temp_dir().join("model_dir");
         fs::create_dir_all(&model_dir)?;
         let build_fn = |batch: &str| -> Result<()> {
@@ -408,15 +336,46 @@ mod tests {
             ))?;
             Ok(())
         };
-        let available_status = ["SUCCESS"];
-        cml.run(config, &available_status, build_fn, build_fn)?;
+        cml.run(config, build_fn, build_fn)?;
+
+        // check if train_start_time is updated
+        let mut result = taos
+            .query("SELECT TBNAME,train_start_time FROM training_data.training_data ORDER BY train_start_time ASC")?;
+        let records = result.to_rows_vec()?;
+        assert_eq!(
+            vec![
+                vec![
+                    Value::VarChar("FUCK8".to_string()),
+                    Value::Null(Ty::Timestamp)
+                ],
+                vec![
+                    Value::VarChar("FUCK8".to_string()),
+                    Value::Null(Ty::Timestamp)
+                ],
+                vec![
+                    Value::VarChar("FUCK".to_string()),
+                    Value::Timestamp(taos_query::common::Timestamp::Nanoseconds(
+                        the_last_success_task_time
+                    ))
+                ],
+                vec![
+                    Value::VarChar("FUCK".to_string()),
+                    Value::Timestamp(taos_query::common::Timestamp::Nanoseconds(
+                        the_last_success_task_time
+                    ))
+                ]
+            ],
+            records
+        );
+
         let records = taos
             .query_one("SELECT COUNT(*) FROM task.task")?
             .unwrap_or(0);
         assert_eq!(4, records);
         let model_file_count = fs::read_dir(&model_dir)?.count();
-        assert_eq!(2, model_file_count);
         fs::remove_dir_all(model_dir)?;
+        assert_eq!(2, model_file_count);
+
         taos.exec("DROP DATABASE IF EXISTS training_data")?;
         taos.exec("DROP DATABASE IF EXISTS task")?;
         Ok(())

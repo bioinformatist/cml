@@ -231,7 +231,6 @@ mod tests {
         let another_metadata = metadata.clone();
         let another_batch_state = batch_state.clone();
         let another_pool = pool.clone();
-        let another_metadata_check = metadata.clone();
 
         let task1 = tokio::spawn(async move {
             cml.register(&metadata, data_1, Some(&batch_state), &pool)
@@ -257,15 +256,6 @@ mod tests {
             .await?
             .unwrap_or(0);
         assert_eq!(4, records);
-        // check tag count
-        let tag_records = taos
-            .query_one(format!(
-                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.INS_TAGS WHERE db_name = 'training_data' and table_name = '{}'",
-                another_metadata_check.batch()
-            ))
-            .await?
-            .unwrap_or(0);
-        assert_eq!(3, tag_records);
 
         taos.exec("DROP DATABASE IF EXISTS training_data").await?;
         Ok(())

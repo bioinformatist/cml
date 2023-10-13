@@ -37,7 +37,7 @@ impl<D: IntoDsn + Clone + Sync> Inference<Field, Value, i64, Manager<TaosBuilder
     async fn inference<FN>(
         &self,
         metadata: &Metadata<Value>,
-        available_status: &[&str],
+        available_status: &[String],
         mut data: Vec<NewSample<Value>>,
         batch_state: &SharedBatchState,
         pool: &Pool<TaosBuilder>,
@@ -263,7 +263,7 @@ mod tests {
                 inference_file2.path().to_str().unwrap().to_owned(),
             )])
             .build()];
-        let available_status = ["SUCCESS"];
+        let available_status = ["SUCCESS".to_string()];
         let last_batch_time_1: i64 = taos
             .query_one(format!(
                 "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({}) ",
@@ -338,6 +338,8 @@ mod tests {
         let batch_meta_2_dup = batch_meta_2.clone();
         let batch_state_3 = batch_state.clone();
         let pool_3 = pool.clone();
+        let available_status_2 = available_status.clone();
+        let available_status_3 = available_status.clone();
         let task1 = tokio::spawn({
             async move {
                 cml.inference(
@@ -357,7 +359,7 @@ mod tests {
                 cml_2
                     .inference(
                         &batch_meta_2,
-                        &available_status,
+                        &available_status_2,
                         batch_data_2,
                         &batch_state_2,
                         &pool_2,
@@ -373,7 +375,7 @@ mod tests {
                 cml_3
                     .inference(
                         &batch_meta_2_dup,
-                        &available_status,
+                        &available_status_3,
                         batch_data_3,
                         &batch_state_3,
                         &pool_3,
