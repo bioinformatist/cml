@@ -37,7 +37,7 @@ impl<D: IntoDsn + Clone + Sync> Inference<Field, Value, i64, Manager<TaosBuilder
     async fn inference<FN>(
         &self,
         metadata: &Metadata<Value>,
-        available_status: &[&str],
+        available_status: &[String],
         mut data: Vec<NewSample<Value>>,
         batch_state: &SharedBatchState,
         pool: &Pool<TaosBuilder>,
@@ -47,8 +47,8 @@ impl<D: IntoDsn + Clone + Sync> Inference<Field, Value, i64, Manager<TaosBuilder
         FN: FnOnce(&mut [NewSample<Value>], &str, i64),
     {
         let taos = pool.get().await?;
+        taos.use_database("inference").await?;
         let mut stmt = Stmt::init(&taos).await?;
-        taos.use_database("task").await?;
         let last_task_time = taos
             .query_one(format!(
                 "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({})",
@@ -60,13 +60,14 @@ impl<D: IntoDsn + Clone + Sync> Inference<Field, Value, i64, Manager<TaosBuilder
                     .join(", ")
             ))
             .await?
-            .unwrap_or_else(|| panic!("There is no task in batch: {}", metadata.batch()));
+            .unwrap_or_else(|| {
+                panic!(
+                    "There are no tasks available in the batch: {}",
+                    metadata.batch()
+                )
+            });
         inference_fn(&mut data, metadata.batch(), last_task_time);
-        taos.use_database("inference").await?;
-        let mut tags = match *metadata.model_update_time() {
-            Some(time) => vec![Value::BigInt(time)],
-            None => vec![Value::Null(Ty::BigInt)],
-        };
+        let mut tags = vec![Value::Null(Ty::Timestamp)];
         if let Some(t) = &metadata.optional_tags() {
             tags.extend_from_slice(t)
         };
@@ -147,7 +148,6 @@ mod tests {
         env, fs,
         io::Write,
         sync::{Arc, Condvar, Mutex},
-        time::{Duration, SystemTime},
     };
     use tempfile::NamedTempFile;
 
@@ -234,19 +234,8 @@ mod tests {
         )
         .await?;
 
-        let model_update_time = (SystemTime::now() - Duration::from_secs(86400))
-            .duration_since(SystemTime::UNIX_EPOCH)?
-            .as_nanos() as i64;
-        let batch_meta_1: Metadata<Value> = Metadata::builder()
-            .model_update_time(model_update_time)
-            .batch("FUCK".to_owned())
-            .build();
-        let batch_meta_2 = Arc::new(
-            Metadata::builder()
-                .model_update_time(model_update_time)
-                .batch("FUCK8".to_owned())
-                .build(),
-        );
+        let batch_meta_1: Metadata<Value> = Metadata::builder().batch("FUCK".to_owned()).build();
+        let batch_meta_2 = Arc::new(Metadata::builder().batch("FUCK8".to_owned()).build());
         let mut inference_file1 = NamedTempFile::new()?;
         write!(inference_file1, "8.8")?;
         let mut inference_file2 = NamedTempFile::new()?;
@@ -274,7 +263,7 @@ mod tests {
                 inference_file2.path().to_str().unwrap().to_owned(),
             )])
             .build()];
-        let available_status = ["SUCCESS"];
+        let available_status = ["SUCCESS".to_string()];
         let last_batch_time_1: i64 = taos
             .query_one(format!(
                 "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({}) ",
@@ -349,6 +338,8 @@ mod tests {
         let batch_meta_2_dup = batch_meta_2.clone();
         let batch_state_3 = batch_state.clone();
         let pool_3 = pool.clone();
+        let available_status_2 = available_status.clone();
+        let available_status_3 = available_status.clone();
         let task1 = tokio::spawn({
             async move {
                 cml.inference(
@@ -368,7 +359,7 @@ mod tests {
                 cml_2
                     .inference(
                         &batch_meta_2,
-                        &available_status,
+                        &available_status_2,
                         batch_data_2,
                         &batch_state_2,
                         &pool_2,
@@ -384,7 +375,7 @@ mod tests {
                 cml_3
                     .inference(
                         &batch_meta_2_dup,
-                        &available_status,
+                        &available_status_3,
                         batch_data_3,
                         &batch_state_3,
                         &pool_3,
