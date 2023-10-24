@@ -21,6 +21,7 @@ serde = { workspace = true }
 chrono = { workspace = true }
 rayon = "1.7.0"
 tokio = { version = "1", features = ["rt", "macros"] }
+derive-getters = { workspace = true }
 
 [dev-dependencies]
 burn = { workspace = true }

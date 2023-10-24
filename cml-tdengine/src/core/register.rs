@@ -9,7 +9,7 @@ use std::future::Future;
 use std::time::{Duration, SystemTime};
 use taos::{taos_query::Manager, *};
 
-impl<D: IntoDsn + Clone + Sync> Register<Field, Value, Manager<TaosBuilder>> for TDengine<D> {
+impl<D: IntoDsn + Clone + Sync> Register<Field, Value, i64, Manager<TaosBuilder>> for TDengine<D> {
     fn init_register(
         &self,
         gt_type: Field,
@@ -42,6 +42,7 @@ impl<D: IntoDsn + Clone + Sync> Register<Field, Value, Manager<TaosBuilder>> for
         &self,
         metadata: &Metadata<Value>,
         train_data: Vec<TrainData<Value>>,
+        current_ts: Option<i64>,
         batch_state: Option<&SharedBatchState>,
         pool: &Pool<TaosBuilder>,
     ) -> Result<()> {
@@ -67,15 +68,19 @@ impl<D: IntoDsn + Clone + Sync> Register<Field, Value, Manager<TaosBuilder>> for
             });
 
             let mut rng = rand::thread_rng();
-            let mut current_ts = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("Clock may have gone backwards")
-                .as_nanos() as i64;
+            let mut time: i64 = if let Some(new_time) = current_ts {
+                new_time
+            } else {
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .expect("Clock may have gone backwards")
+                    .as_nanos() as i64
+            };
 
             let mut values_to_bind = Vec::<Vec<ColumnView>>::new();
             for data in &train_data {
                 let mut values = vec![
-                    ColumnView::from_nanos_timestamp(vec![current_ts]),
+                    ColumnView::from_nanos_timestamp(vec![time]),
                     ColumnView::from_bools(vec![rng.gen::<f32>() >= 0.2]),
                     ColumnView::from(data.gt().clone()),
                 ];
@@ -89,7 +94,7 @@ impl<D: IntoDsn + Clone + Sync> Register<Field, Value, Manager<TaosBuilder>> for
                 }
 
                 values_to_bind.push(values);
-                current_ts += Duration::from_nanos(1).as_nanos() as i64;
+                time += Duration::from_nanos(1).as_nanos() as i64;
             }
 
             if let Some((mut batch_state, cvar)) = batch_state_cvar {
@@ -131,11 +136,21 @@ mod tests {
         options::{CacheModel, ReplicaNum, SingleSTable},
         Database,
     };
+    use chrono::{Duration, NaiveDateTime};
     use cml_core::{core::register::TrainData, Metadata};
 
     #[tokio::test]
     async fn test_register_init() -> Result<()> {
-        let cml = TDengine::from_dsn("taos://");
+        let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
+        let available_status = vec!["SUCCESS".to_string()];
+        let cml = TDengine::from_dsn(
+            "taos://",
+            1,
+            1,
+            working_status,
+            available_status,
+            Duration::days(2),
+        );
         let taos = cml.build().await?;
 
         taos::AsyncQueryable::exec(&taos, "DROP DATABASE IF EXISTS training_data").await?;
@@ -177,7 +192,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_register() -> Result<()> {
-        let cml = Arc::new(TDengine::from_dsn("taos://"));
+        let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
+        let available_status = vec!["SUCCESS".to_string()];
+        let cml = Arc::new(TDengine::from_dsn(
+            "taos://",
+            1,
+            1,
+            working_status,
+            available_status,
+            Duration::days(2),
+        ));
         let pool = Arc::new(cml.build_pool());
         let taos = pool.get().await?;
 
@@ -231,9 +255,11 @@ mod tests {
         let another_metadata = metadata.clone();
         let another_batch_state = batch_state.clone();
         let another_pool = pool.clone();
+        let date_time = NaiveDateTime::parse_from_str("2018-08-18 18:18:18", "%Y-%m-%d %H:%M:%S")?;
+        let date_time_nanos = date_time.timestamp_nanos_opt().unwrap();
 
         let task1 = tokio::spawn(async move {
-            cml.register(&metadata, data_1, Some(&batch_state), &pool)
+            cml.register(&metadata, data_1, None, None, &pool)
                 .await
                 .expect("Task 1 failed")
         });
@@ -242,6 +268,7 @@ mod tests {
                 .register(
                     &another_metadata,
                     data_2,
+                    Some(date_time_nanos),
                     Some(&another_batch_state),
                     &another_pool,
                 )
@@ -257,6 +284,21 @@ mod tests {
             .unwrap_or(0);
         assert_eq!(4, records);
 
+        let mut time_result = taos
+            .query("SELECT ts FROM training_data.training_data ORDER BY ts ASC limit 2")
+            .await?;
+        let time_records = time_result.to_records().await?;
+        assert_eq!(
+            vec![
+                vec![Value::Timestamp(
+                    taos::taos_query::common::Timestamp::Nanoseconds(date_time_nanos)
+                )],
+                vec![Value::Timestamp(
+                    taos::taos_query::common::Timestamp::Nanoseconds(date_time_nanos + 1)
+                )]
+            ],
+            time_records
+        );
         taos.exec("DROP DATABASE IF EXISTS training_data").await?;
         Ok(())
     }
