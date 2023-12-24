@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = { workspace = true }
 dashmap = { workspace = true }
-derive-getters = "0.2.1"
+derive-getters = { workspace = true }
 typed-builder = { workspace = true }
 deadpool = { version = "0.10.0", default-features = false, features = ["managed", "rt_tokio_1"] }
 serde = { workspace = true }

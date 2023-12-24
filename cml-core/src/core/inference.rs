@@ -26,9 +26,9 @@ pub trait Inference<M, F, T, C: Manager> {
     fn inference<FN>(
         &self,
         metadata: &Metadata<F>,
-        available_status: &[String],
         data: Vec<NewSample<F>>,
-        batch_state: &SharedBatchState,
+        current_ts: Option<T>,
+        batch_state: Option<&SharedBatchState>,
         pool: &Pool<C>,
         inference_fn: FN,
     ) -> impl Future<Output = Result<()>>

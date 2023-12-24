@@ -12,7 +12,7 @@ pub struct TrainData<F> {
     optional_fields: Option<Vec<F>>,
 }
 
-pub trait Register<M, F, C: Manager> {
+pub trait Register<M, F, T, C: Manager> {
     fn init_register(
         &self,
         gt_type: M,
@@ -24,6 +24,7 @@ pub trait Register<M, F, C: Manager> {
         &self,
         metadata: &Metadata<F>,
         train_data: Vec<TrainData<F>>,
+        current_ts: Option<T>,
         batch_state: Option<&SharedBatchState>,
         pool: &Pool<C>,
     ) -> impl Future<Output = Result<()>> + Send;

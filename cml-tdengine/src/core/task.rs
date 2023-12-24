@@ -1,15 +1,12 @@
 use crate::{models::stables::STable, TDengine};
 use anyhow::Result;
 use chrono::{DateTime, Local};
+use cml_core::{core::task::Task, Handler};
 use rayon::prelude::*;
 use serde::Deserialize;
-
-use cml_core::{
-    core::task::{Task, TaskConfig},
-    Handler,
-};
 use std::future::Future;
 use taos::sync::*;
+
 #[derive(Deserialize)]
 struct BatchInfo {
     #[serde(alias = "tbname")]
@@ -51,12 +48,7 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
         }
     }
 
-    fn run<FN>(
-        &self,
-        task_config: TaskConfig,
-        build_from_scratch_fn: FN,
-        fining_build_fn: FN,
-    ) -> Result<()>
+    fn run<FN>(&self, build_from_scratch_fn: FN, fining_build_fn: FN) -> Result<()>
     where
         FN: Fn(&str) -> Result<()> + Send + Sync,
     {
@@ -64,8 +56,7 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
         let records = taos
             .query(format!(
                 "SELECT TBNAME, LAST(ts) FROM task.task WHERE status IN ({}) GROUP BY TBNAME",
-                task_config
-                    .available_status()
+                self.available_status()
                     .iter()
                     .map(|s| format!("'{}'", s))
                     .collect::<Vec<String>>()
@@ -90,8 +81,7 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
         let task_info: Vec<TaskInfo> = taos
             .query(format!(
                 "SELECT DISTINCT TBNAME, ts FROM task.task WHERE status IN ({})",
-                task_config
-                    .working_status()
+                self.working_status()
                     .iter()
                     .map(|s| format!("'{}'", s))
                     .collect::<Vec<String>>()
@@ -103,7 +93,7 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
         let mut timeout_clause = Vec::<String>::new();
         let mut batch_with_task = Vec::<String>::new();
         for task in task_info {
-            if Local::now().signed_duration_since(task.ts) > *task_config.limit_time() {
+            if Local::now().signed_duration_since(task.ts) > *self.limit_time() {
                 timeout_clause.push(format!(
                     "task.`{}` (ts, status) VALUES ({}, '{}') ",
                     task.batch,
@@ -133,7 +123,7 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
                             train_start_time.timestamp_nanos_opt().unwrap(),
                         ))?
                         .unwrap_or(0);
-                    if count as usize > *task_config.min_update_count() {
+                    if count as usize > *self.min_update_count() {
                         scratch_in_queue.push(batch.batch);
                     }
                 }
@@ -144,7 +134,7 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
                             batch.batch
                         ))?
                         .unwrap_or(0);
-                    if count as usize > *task_config.min_start_count() {
+                    if count as usize > *self.min_start_count() {
                         fining_in_queue.push(batch.batch);
                     }
                 }
@@ -175,13 +165,22 @@ mod tests {
     use super::*;
     use crate::{CacheModel, Database, ReplicaNum, SingleSTable};
     use chrono::Duration;
-    use cml_core::core::task::{Task, TaskConfig};
+    use cml_core::core::task::Task;
     use std::{env, fs, io::prelude::*};
     use tempfile::NamedTempFile;
 
     #[tokio::test]
     async fn test_task_init() -> Result<()> {
-        let cml = TDengine::from_dsn("taos://");
+        let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
+        let available_status = vec!["SUCCESS".to_string()];
+        let cml = TDengine::from_dsn(
+            "taos://",
+            1,
+            1,
+            working_status,
+            available_status,
+            Duration::days(2),
+        );
         let taos = cml.build().await?;
 
         taos::AsyncQueryable::exec(&taos, "DROP DATABASE IF EXISTS task").await?;
@@ -212,17 +211,18 @@ mod tests {
 
     #[test]
     fn test_task_running_in_parallel() -> Result<()> {
-        let cml = TDengine::from_dsn("taos://");
+        let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
+        let available_status = vec!["SUCCESS".to_string()];
+        let cml = TDengine::from_dsn(
+            "taos://",
+            1,
+            1,
+            working_status.clone(),
+            available_status.clone(),
+            Duration::days(2),
+        );
         let taos = cml.build_sync()?;
-        let working_status = ["TRAIN".to_string(), "EVAL".to_string()];
-        let available_status = ["SUCCESS".to_string()];
-        let config: TaskConfig = TaskConfig::builder()
-            .min_start_count(1)
-            .min_update_count(1)
-            .working_status(&working_status)
-            .available_status(&available_status)
-            .limit_time(Duration::days(2))
-            .build();
+
         let mut training_data_file1 = NamedTempFile::new()?;
         write!(training_data_file1, "8.8")?;
         let mut training_data_file2 = NamedTempFile::new()?;
@@ -281,8 +281,7 @@ mod tests {
         let the_last_success_task_time = taos
             .query_one(format!(
                 "SELECT LAST(ts) FROM task.`FUCK` WHERE status IN ({})",
-                config
-                    .available_status()
+                available_status
                     .iter()
                     .map(|s| format!("'{}'", s))
                     .collect::<Vec<String>>()
@@ -293,7 +292,17 @@ mod tests {
         let model_dir = env::temp_dir().join("model_dir");
         fs::create_dir_all(&model_dir)?;
         let build_fn = |batch: &str| -> Result<()> {
-            let taos = TDengine::from_dsn("taos://").build_sync()?;
+            let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
+            let available_status = vec!["SUCCESS".to_string()];
+            let taos = TDengine::from_dsn(
+                "taos://",
+                1,
+                1,
+                working_status,
+                available_status,
+                Duration::days(2),
+            )
+            .build_sync()?;
             taos.exec(format!(
                 "INSERT INTO task.`{}`
                 USING task.task
@@ -336,7 +345,7 @@ mod tests {
             ))?;
             Ok(())
         };
-        cml.run(config, build_fn, build_fn)?;
+        cml.run(build_fn, build_fn)?;
 
         // check if train_start_time is updated
         let mut result = taos

@@ -37,9 +37,9 @@ impl<D: IntoDsn + Clone + Sync> Inference<Field, Value, i64, Manager<TaosBuilder
     async fn inference<FN>(
         &self,
         metadata: &Metadata<Value>,
-        available_status: &[String],
         mut data: Vec<NewSample<Value>>,
-        batch_state: &SharedBatchState,
+        current_ts: Option<i64>,
+        batch_state: Option<&SharedBatchState>,
         pool: &Pool<TaosBuilder>,
         inference_fn: FN,
     ) -> Result<()>
@@ -53,7 +53,7 @@ impl<D: IntoDsn + Clone + Sync> Inference<Field, Value, i64, Manager<TaosBuilder
             .query_one(format!(
                 "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({})",
                 metadata.batch(),
-                available_status
+                self.available_status()
                     .iter()
                     .map(|s| format!("'{}'", s))
                     .collect::<Vec<String>>()
@@ -82,24 +82,31 @@ impl<D: IntoDsn + Clone + Sync> Inference<Field, Value, i64, Manager<TaosBuilder
                 .ty(),
         );
         let values_to_bind = {
-            let (lock, cvar) = &**batch_state;
-            let mut batch_state = lock.lock().unwrap();
-            while batch_state.contains(&metadata.batch) {
-                batch_state = cvar.wait(batch_state).unwrap();
-            }
-            batch_state.insert(metadata.batch.clone());
-            let mut current_ts = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("Clock may have gone backwards")
-                .as_nanos() as i64;
+            let batch_state_cvar = batch_state.map(|batch_state| {
+                let (lock, cvar) = &**batch_state;
+                let mut batch_state = lock.lock().unwrap();
+                while batch_state.contains(&metadata.batch) {
+                    batch_state = cvar.wait(batch_state).unwrap();
+                }
+                batch_state.insert(metadata.batch.clone());
+                (batch_state, cvar)
+            });
 
+            let mut time: i64 = if let Some(new_time) = current_ts {
+                new_time
+            } else {
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .expect("Clock may have gone backwards")
+                    .as_nanos() as i64
+            };
             let mut values_to_bind = Vec::<Vec<ColumnView>>::new();
             for sample in data {
                 let output = match sample.output() {
                     Some(value) => ColumnView::from(value.clone()),
                     None => null.clone(),
                 };
-                let mut values = vec![ColumnView::from_nanos_timestamp(vec![current_ts]), output];
+                let mut values = vec![ColumnView::from_nanos_timestamp(vec![time]), output];
                 if let Some(fields) = sample.optional_fields() {
                     values.append(
                         &mut fields
@@ -110,11 +117,13 @@ impl<D: IntoDsn + Clone + Sync> Inference<Field, Value, i64, Manager<TaosBuilder
                 }
 
                 values_to_bind.push(values);
-                current_ts += Duration::from_nanos(1).as_nanos() as i64;
+                time += Duration::from_nanos(1).as_nanos() as i64;
             }
 
-            batch_state.remove(&metadata.batch);
-            cvar.notify_one();
+            if let Some((mut batch_state, cvar)) = batch_state_cvar {
+                batch_state.remove(&metadata.batch);
+                cvar.notify_one();
+            }
             values_to_bind
         };
         let field_placeholder = get_placeholders(values_to_bind.first().unwrap());
@@ -142,6 +151,7 @@ mod tests {
         Database,
     };
     use anyhow::Ok;
+    use chrono::{Duration, NaiveDateTime};
     use cml_core::{core::inference::NewSample, Metadata};
     use std::{
         collections::HashSet,
@@ -153,7 +163,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_inference_init() -> Result<()> {
-        let cml = TDengine::from_dsn("taos://");
+        let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
+        let available_status = vec!["SUCCESS".to_string()];
+        let cml = TDengine::from_dsn(
+            "taos://",
+            1,
+            1,
+            working_status,
+            available_status,
+            Duration::days(2),
+        );
         let taos = cml.build().await?;
 
         taos::AsyncQueryable::exec(&taos, "DROP DATABASE IF EXISTS inference").await?;
@@ -187,7 +206,17 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_concurrent_inference() -> Result<()> {
-        let cml = Arc::new(TDengine::from_dsn("taos://"));
+        let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
+        let available_status = vec!["SUCCESS".to_string()];
+
+        let cml = Arc::new(TDengine::from_dsn(
+            "taos://",
+            1,
+            1,
+            working_status,
+            available_status,
+            Duration::days(2),
+        ));
         let pool = Arc::new(cml.build_pool());
         let taos = pool.get().await?;
 
@@ -263,12 +292,12 @@ mod tests {
                 inference_file2.path().to_str().unwrap().to_owned(),
             )])
             .build()];
-        let available_status = ["SUCCESS".to_string()];
+        let available_status_2 = ["SUCCESS".to_string()];
         let last_batch_time_1: i64 = taos
             .query_one(format!(
                 "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({}) ",
                 batch_meta_1.batch(),
-                available_status
+                available_status_2
                     .iter()
                     .map(|s| format!("'{}'", s))
                     .collect::<Vec<String>>()
@@ -280,7 +309,7 @@ mod tests {
             .query_one(format!(
                 "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({}) ",
                 batch_meta_2.batch(),
-                available_status
+                available_status_2
                     .iter()
                     .map(|s| format!("'{}'", s))
                     .collect::<Vec<String>>()
@@ -338,15 +367,17 @@ mod tests {
         let batch_meta_2_dup = batch_meta_2.clone();
         let batch_state_3 = batch_state.clone();
         let pool_3 = pool.clone();
-        let available_status_2 = available_status.clone();
-        let available_status_3 = available_status.clone();
+
+        let date_time = NaiveDateTime::parse_from_str("2018-08-18 18:18:18", "%Y-%m-%d %H:%M:%S")?;
+        let date_time_nanos = date_time.timestamp_nanos_opt().unwrap();
+
         let task1 = tokio::spawn({
             async move {
                 cml.inference(
                     &batch_meta_1,
-                    &available_status,
                     batch_data_1,
-                    &batch_state,
+                    Some(date_time_nanos),
+                    Some(&batch_state),
                     &pool,
                     inference_fn,
                 )
@@ -359,9 +390,9 @@ mod tests {
                 cml_2
                     .inference(
                         &batch_meta_2,
-                        &available_status_2,
                         batch_data_2,
-                        &batch_state_2,
+                        Some(date_time_nanos + 100),
+                        Some(&batch_state_2),
                         &pool_2,
                         inference_fn,
                     )
@@ -375,9 +406,9 @@ mod tests {
                 cml_3
                     .inference(
                         &batch_meta_2_dup,
-                        &available_status_3,
                         batch_data_3,
-                        &batch_state_3,
+                        None,
+                        Some(&batch_state_3),
                         &pool_3,
                         inference_fn,
                     )
@@ -400,6 +431,25 @@ mod tests {
                 vec![Value::Float(118.8)]
             ],
             records
+        );
+
+        let mut time_result = taos
+            .query("SELECT ts FROM inference.inference ORDER BY ts ASC limit 3")
+            .await?;
+        let time_records = time_result.to_records().await?;
+        assert_eq!(
+            vec![
+                vec![Value::Timestamp(
+                    taos::taos_query::common::Timestamp::Nanoseconds(date_time_nanos)
+                )],
+                vec![Value::Timestamp(
+                    taos::taos_query::common::Timestamp::Nanoseconds(date_time_nanos + 1)
+                )],
+                vec![Value::Timestamp(
+                    taos::taos_query::common::Timestamp::Nanoseconds(date_time_nanos + 100)
+                )]
+            ],
+            time_records
         );
 
         fs::remove_dir_all(working_dir)?;

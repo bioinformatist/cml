@@ -1,25 +1,42 @@
 //! cml_tdengine
 //!
 //!
-
-#![feature(return_position_impl_trait_in_trait)]
-#![feature(async_fn_in_trait)]
 use anyhow::Result;
+use chrono::Duration;
+use derive_getters::Getters;
 use taos::taos_query::Manager;
 use taos::{sync::*, Pool};
 
 mod core;
 mod models;
-
-#[derive(Clone)]
+#[derive(TypedBuilder, Clone, Getters)]
 pub struct TDengine<D> {
     dsn: D,
+    min_start_count: usize,
+    min_update_count: usize,
+    working_status: Vec<String>,
+    available_status: Vec<String>,
+    limit_time: Duration,
 }
 
 impl<D: IntoDsn + Clone> TDengine<D> {
     #[allow(dead_code)]
-    pub fn from_dsn(dsn: D) -> Self {
-        TDengine { dsn }
+    pub fn from_dsn(
+        dsn: D,
+        min_start_count: usize,
+        min_update_count: usize,
+        working_status: Vec<String>,
+        available_status: Vec<String>,
+        limit_time: Duration,
+    ) -> Self {
+        TDengine {
+            dsn,
+            min_start_count,
+            min_update_count,
+            working_status,
+            available_status,
+            limit_time,
+        }
     }
 
     #[allow(dead_code)]
@@ -43,3 +60,4 @@ impl<D: IntoDsn + Clone> TDengine<D> {
 }
 
 pub use models::databases::{options::*, Database};
+use typed_builder::TypedBuilder;
