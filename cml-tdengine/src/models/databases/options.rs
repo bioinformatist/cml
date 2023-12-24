@@ -1,12 +1,12 @@
 #[allow(dead_code)]
 #[repr(u8)]
-pub(crate) enum ReplicaNum {
+pub enum ReplicaNum {
     NoReplica = 1,
     WithReplica = 3,
 }
 
 #[allow(dead_code)]
-pub(crate) enum CacheModel {
+pub enum CacheModel {
     None,
     LastRow,
     LastValue,
@@ -26,7 +26,7 @@ impl CacheModel {
 
 #[allow(dead_code)]
 #[repr(u8)]
-pub(crate) enum SingleSTable {
+pub enum SingleSTable {
     False,
     True,
 }

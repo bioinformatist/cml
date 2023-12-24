@@ -1,14 +1,14 @@
 pub(crate) mod options;
 
 use anyhow::Result;
-use cml_core::handler::Handler;
+use cml_core::Handler;
 use taos::*;
+use typed_builder::TypedBuilder;
 
 use options::{CacheModel, ReplicaNum, SingleSTable};
 
-#[derive(Builder)]
-#[builder(pattern = "owned")]
-pub(crate) struct Database<'a> {
+#[derive(TypedBuilder)]
+pub struct Database<'a> {
     name: &'a str,
     duration: i16,
     keep: i16,

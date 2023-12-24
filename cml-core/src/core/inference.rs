@@ -1,36 +1,37 @@
-use crate::metadata::MetaData;
+use crate::{metadata::Metadata, SharedBatchState};
 use anyhow::Result;
 use deadpool::managed::{Manager, Pool};
 use derive_getters::Getters;
-use std::path::PathBuf;
+use std::future::Future;
+use typed_builder::TypedBuilder;
 
-#[derive(Builder, Getters)]
+#[derive(TypedBuilder, Getters)]
 pub struct NewSample<F> {
-    data_path: PathBuf,
-    #[builder(default = "None")]
-    output: Option<F>,
-    #[builder(default = "None")]
+    #[builder(default, setter(strip_option))]
+    pub output: Option<F>,
+    #[builder(default, setter(strip_option))]
     optional_fields: Option<Vec<F>>,
-    #[builder(default = "None")]
+    #[builder(default, setter(strip_option))]
     optional_tags: Option<Vec<F>>,
 }
 
 pub trait Inference<M, F, T, C: Manager> {
-    async fn init_inference(
+    fn init_inference(
         &self,
         target_type: M,
         optional_fields: Option<Vec<M>>,
         optional_tags: Option<Vec<M>>,
-    ) -> Result<()>;
+    ) -> impl Future<Output = Result<()>> + Send;
 
-    async fn inference<FN>(
+    fn inference<FN>(
         &self,
-        metadata: MetaData<F>,
-        available_status: &[&str],
-        data: &mut Vec<NewSample<F>>,
+        metadata: &Metadata<F>,
+        data: Vec<NewSample<F>>,
+        current_ts: Option<T>,
+        batch_state: Option<&SharedBatchState>,
         pool: &Pool<C>,
         inference_fn: FN,
-    ) -> Result<()>
+    ) -> impl Future<Output = Result<()>>
     where
-        FN: FnOnce(&mut Vec<NewSample<F>>, &str, T) -> Vec<NewSample<F>>;
+        FN: FnOnce(&mut [NewSample<F>], &str, T);
 }
