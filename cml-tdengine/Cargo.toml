@@ -8,9 +8,7 @@ edition = "2021"
 [dependencies]
 cml-core = { path = "../cml-core" }
 
-taos = { git = "https://github.com/bioinformatist/taos-connector-rust.git", branch = "fix/fix_memory_problem", version = "*", default-features = false, features = [
-  "native",
-] }
+taos = { version = "*", default-features = false, features = ["native"] }
 taos-sys = { version = "*" }
 taos-query = { version = "*" }
 anyhow = { workspace = true }
