@@ -165,7 +165,7 @@ mod tests {
     async fn test_inference_init() -> Result<()> {
         let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
         let available_status = vec!["SUCCESS".to_string()];
-        let cml = TDengine::from_dsn(
+        let cml = TDengine::new(
             "taos://",
             1,
             1,
@@ -209,7 +209,7 @@ mod tests {
         let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
         let available_status = vec!["SUCCESS".to_string()];
 
-        let cml = Arc::new(TDengine::from_dsn(
+        let cml = Arc::new(TDengine::new(
             "taos://",
             1,
             1,

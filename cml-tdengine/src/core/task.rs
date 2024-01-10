@@ -173,7 +173,7 @@ mod tests {
     async fn test_task_init() -> Result<()> {
         let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
         let available_status = vec!["SUCCESS".to_string()];
-        let cml = TDengine::from_dsn(
+        let cml = TDengine::new(
             "taos://",
             1,
             1,
@@ -213,7 +213,7 @@ mod tests {
     fn test_task_running_in_parallel() -> Result<()> {
         let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
         let available_status = vec!["SUCCESS".to_string()];
-        let cml = TDengine::from_dsn(
+        let cml = TDengine::new(
             "taos://",
             1,
             1,
@@ -294,7 +294,7 @@ mod tests {
         let build_fn = |batch: &str| -> Result<()> {
             let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
             let available_status = vec!["SUCCESS".to_string()];
-            let taos = TDengine::from_dsn(
+            let taos = TDengine::new(
                 "taos://",
                 1,
                 1,

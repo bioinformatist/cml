@@ -21,7 +21,7 @@ pub struct TDengine<D> {
 
 impl<D: IntoDsn + Clone> TDengine<D> {
     #[allow(dead_code)]
-    pub fn from_dsn(
+    pub fn new(
         dsn: D,
         min_start_count: usize,
         min_update_count: usize,
