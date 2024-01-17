@@ -2,7 +2,6 @@ use crate::{models::stables::STable, TDengine};
 use anyhow::Result;
 use chrono::{DateTime, Local};
 use cml_core::{core::task::Task, Handler};
-use rayon::prelude::*;
 use serde::Deserialize;
 use std::future::Future;
 use taos::sync::*;
@@ -14,12 +13,12 @@ struct BatchInfo {
     train_start_time: Option<DateTime<Local>>,
 }
 
-#[derive(Deserialize)]
-struct TaskInfo {
-    #[serde(alias = "tbname")]
-    batch: String,
-    ts: DateTime<Local>,
-}
+// #[derive(Deserialize)]
+// struct TaskInfo {
+//     #[serde(alias = "tbname")]
+//     batch: String,
+//     ts: DateTime<Local>,
+// }
 
 impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
     fn init_task(
@@ -48,11 +47,8 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
         }
     }
 
-    fn run<FN>(&self, build_from_scratch_fn: FN, fining_build_fn: FN) -> Result<()>
-    where
-        FN: Fn(&str) -> Result<()> + Send + Sync,
-    {
-        let taos = self.build_sync().unwrap();
+    fn prepare<FN>(&self) -> Result<(Vec<String>, Vec<String>)> {
+        let taos = self.build_sync()?;
         let records = taos
             .query(format!(
                 "SELECT TBNAME, LAST(ts) FROM task.task WHERE status IN ({}) GROUP BY TBNAME",
@@ -73,42 +69,42 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
             ))
             .unwrap();
         });
-        let mut batch_info: Vec<BatchInfo> = taos
+        let batch_info: Vec<BatchInfo> = taos
             .query("SELECT DISTINCT TBNAME, train_start_time FROM training_data.training_data")?
             .deserialize()
             .try_collect()?;
 
-        let task_info: Vec<TaskInfo> = taos
-            .query(format!(
-                "SELECT DISTINCT TBNAME, ts FROM task.task WHERE status IN ({})",
-                self.working_status()
-                    .iter()
-                    .map(|s| format!("'{}'", s))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            ))?
-            .deserialize()
-            .try_collect()?;
+        // let task_info: Vec<TaskInfo> = taos
+        //     .query(format!(
+        //         "SELECT DISTINCT TBNAME, ts FROM task.task WHERE status IN ({})",
+        //         self.working_status()
+        //             .iter()
+        //             .map(|s| format!("'{}'", s))
+        //             .collect::<Vec<String>>()
+        //             .join(", ")
+        //     ))?
+        //     .deserialize()
+        //     .try_collect()?;
 
-        let mut timeout_clause = Vec::<String>::new();
-        let mut batch_with_task = Vec::<String>::new();
-        for task in task_info {
-            if Local::now().signed_duration_since(task.ts) > *self.limit_time() {
-                timeout_clause.push(format!(
-                    "task.`{}` (ts, status) VALUES ({}, '{}') ",
-                    task.batch,
-                    task.ts.timestamp_nanos_opt().unwrap(),
-                    "DEAD"
-                ));
-            } else {
-                batch_with_task.push(task.batch);
-            }
-        }
+        // let mut timeout_clause = Vec::<String>::new();
+        // let mut batch_with_task = Vec::<String>::new();
+        // for task in task_info {
+        //     if Local::now().signed_duration_since(task.ts) > *self.limit_time() {
+        //         timeout_clause.push(format!(
+        //             "task.`{}` (ts, status) VALUES ({}, '{}') ",
+        //             task.batch,
+        //             task.ts.timestamp_nanos_opt().unwrap(),
+        //             "DEAD"
+        //         ));
+        //     } else {
+        //         batch_with_task.push(task.batch);
+        //     }
+        // }
 
-        if !timeout_clause.is_empty() {
-            taos.exec("INSERT INTO ".to_owned() + &timeout_clause.join(" "))?;
-        }
-        batch_info.retain(|b| !batch_with_task.contains(&b.batch));
+        // if !timeout_clause.is_empty() {
+        //     taos.exec("INSERT INTO ".to_owned() + &timeout_clause.join(" "))?;
+        // }
+        // batch_info.retain(|b| !batch_with_task.contains(&b.batch));
 
         let mut scratch_in_queue = Vec::<String>::new();
         let mut fining_in_queue = Vec::<String>::new();
@@ -141,22 +137,7 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
             }
         }
 
-        rayon::join(
-            || {
-                scratch_in_queue
-                    .par_iter()
-                    .map(|b| build_from_scratch_fn(b).unwrap())
-                    .collect::<Vec<()>>()
-            },
-            || {
-                fining_in_queue
-                    .par_iter()
-                    .map(|b| fining_build_fn(b).unwrap())
-                    .collect::<Vec<()>>()
-            },
-        );
-
-        Ok(())
+        Ok((scratch_in_queue, fining_in_queue))
     }
 }
 
@@ -345,7 +326,7 @@ mod tests {
             ))?;
             Ok(())
         };
-        cml.run(build_fn, build_fn)?;
+        // cml.prepare(build_fn, build_fn)?;
 
         // check if train_start_time is updated
         let mut result = taos
