@@ -7,5 +7,5 @@ pub trait Task<M> {
         optional_tags: Option<Vec<M>>,
     ) -> impl Future<Output = Result<()>> + Send;
 
-    fn prepare<FN>(&self) -> Result<(Vec<String>, Vec<String>)>;
+    fn prepare(&self) -> Result<(Vec<String>, Vec<String>)>;
 }

@@ -47,7 +47,7 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
         }
     }
 
-    fn prepare<FN>(&self) -> Result<(Vec<String>, Vec<String>)> {
+    fn prepare(&self) -> Result<(Vec<String>, Vec<String>)> {
         let taos = self.build_sync()?;
         let records = taos
             .query(format!(
