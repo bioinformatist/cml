@@ -69,8 +69,20 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
             ))
             .unwrap();
         });
-        let batch_info: Vec<BatchInfo> = taos
+        let mut batch_info: Vec<BatchInfo> = taos
             .query("SELECT DISTINCT TBNAME, train_start_time FROM training_data.training_data")?
+            .deserialize()
+            .try_collect()?;
+
+        let batch_with_task: Vec<String> = taos
+            .query(format!(
+                "SELECT LAST(TBNAME) FROM task.task WHERE status IN ({})",
+                self.working_status()
+                    .iter()
+                    .map(|s| format!("'{}'", s))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ))?
             .deserialize()
             .try_collect()?;
 
@@ -104,7 +116,7 @@ impl<D: IntoDsn + Clone + Sync> Task<Field> for TDengine<D> {
         // if !timeout_clause.is_empty() {
         //     taos.exec("INSERT INTO ".to_owned() + &timeout_clause.join(" "))?;
         // }
-        // batch_info.retain(|b| !batch_with_task.contains(&b.batch));
+        batch_info.retain(|b| !batch_with_task.contains(&b.batch));
 
         let mut scratch_in_queue = Vec::<String>::new();
         let mut fining_in_queue = Vec::<String>::new();
