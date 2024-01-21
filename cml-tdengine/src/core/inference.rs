@@ -2,24 +2,20 @@ use crate::{models::stables::STable, TDengine};
 use anyhow::Result;
 use cml_core::{
     core::inference::{Inference, NewSample},
-    handler::Handler,
-    metadata::MetaData,
+    get_placeholders, Handler, Metadata, SharedBatchState,
 };
+use std::future::Future;
 use std::time::{Duration, SystemTime};
 use taos::{taos_query::Manager, *};
 
-impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for TDengine<D> {
-    async fn init_inference(
+impl<D: IntoDsn + Clone + Sync> Inference<Field, Value, i64, Manager<TaosBuilder>> for TDengine<D> {
+    fn init_inference(
         &self,
         target_type: Field,
         optional_fields: Option<Vec<Field>>,
         optional_tags: Option<Vec<Field>>,
-    ) -> Result<()> {
-        let mut fields = vec![
-            Field::new("ts", Ty::Timestamp, 8),
-            Field::new("data_path", Ty::NChar, 255),
-            target_type,
-        ];
+    ) -> impl Future<Output = Result<()>> + Send {
+        let mut fields = vec![Field::new("ts", Ty::Timestamp, 8), target_type];
         if let Some(f) = optional_fields {
             fields.extend_from_slice(&f);
         }
@@ -31,92 +27,118 @@ impl<D: IntoDsn + Clone> Inference<Field, Value, i64, Manager<TaosBuilder>> for 
 
         let stable = STable::new("inference", fields, tags);
 
-        let client = self.build().await?;
-        stable.init(&client, Some("inference")).await?;
-
-        Ok(())
+        async {
+            let client = self.build().await?;
+            stable.init(&client, Some("inference")).await?;
+            Ok(())
+        }
     }
 
     async fn inference<FN>(
         &self,
-        metadata: MetaData<Value>,
-        available_status: &[&str],
-        data: &mut Vec<NewSample<Value>>,
+        metadata: &Metadata<Value>,
+        mut data: Vec<NewSample<Value>>,
+        current_ts: Option<i64>,
+        batch_state: Option<&SharedBatchState>,
         pool: &Pool<TaosBuilder>,
         inference_fn: FN,
     ) -> Result<()>
     where
-        FN: FnOnce(&mut Vec<NewSample<Value>>, &str, i64) -> Vec<NewSample<Value>>,
+        FN: FnOnce(&mut [NewSample<Value>], &str, i64),
     {
         let taos = pool.get().await?;
-        let mut stmt = Stmt::init(&taos)?;
-        taos.use_database("task").await?;
+        taos.use_database("inference").await?;
+        let mut stmt = Stmt::init(&taos).await?;
         let last_task_time = taos
             .query_one(format!(
                 "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({})",
                 metadata.batch(),
-                available_status
+                self.available_status()
                     .iter()
                     .map(|s| format!("'{}'", s))
                     .collect::<Vec<String>>()
                     .join(", ")
             ))
             .await?
-            .unwrap_or_else(|| panic!("There is no task in batch: {}", metadata.batch()));
-        let samples_with_res = inference_fn(data, metadata.batch(), last_task_time);
-        taos.use_database("inference").await?;
-        let (tag_placeholder, field_placeholder) = metadata.get_placeholders();
-
-        stmt.prepare(format!(
-            "INSERT INTO ? USING inference TAGS ({}) VALUES ({})",
-            tag_placeholder, field_placeholder
-        ))?;
-
-        let mut tags = vec![Value::BigInt(*metadata.model_update_time())];
+            .unwrap_or_else(|| {
+                panic!(
+                    "There are no tasks available in the batch: {}",
+                    metadata.batch()
+                )
+            });
+        inference_fn(&mut data, metadata.batch(), last_task_time);
+        let mut tags = vec![Value::Null(Ty::Timestamp)];
         if let Some(t) = &metadata.optional_tags() {
             tags.extend_from_slice(t)
         };
-        stmt.set_tbname_tags(metadata.batch(), &tags)?;
+        let tag_placeholder = get_placeholders(&tags);
+        let null = ColumnView::null(
+            1,
+            taos.query("SELECT * FROM inference LIMIT 0")
+                .await?
+                .fields()
+                .get(1)
+                .unwrap()
+                .ty(),
+        );
+        let values_to_bind = {
+            let batch_state_cvar = batch_state.map(|batch_state| {
+                let (lock, cvar) = &**batch_state;
+                let mut batch_state = lock.lock().unwrap();
+                while batch_state.contains(&metadata.batch) {
+                    batch_state = cvar.wait(batch_state).unwrap();
+                }
+                batch_state.insert(metadata.batch.clone());
+                (batch_state, cvar)
+            });
 
-        let mut current_ts = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("Clock may have gone backwards")
-            .as_nanos() as i64;
-
-        for sample in &samples_with_res {
-            let output = match sample.output() {
-                Some(value) => ColumnView::from(value.clone()),
-                None => ColumnView::null(
-                    1,
-                    taos.query("SELECT * FROM inference LIMIT 0")
-                        .await?
-                        .fields()
-                        .get(2)
-                        .unwrap()
-                        .ty(),
-                ),
+            let mut time: i64 = if let Some(new_time) = current_ts {
+                new_time
+            } else {
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .expect("Clock may have gone backwards")
+                    .as_nanos() as i64
             };
+            let mut values_to_bind = Vec::<Vec<ColumnView>>::new();
+            for sample in data {
+                let output = match sample.output() {
+                    Some(value) => ColumnView::from(value.clone()),
+                    None => null.clone(),
+                };
+                let mut values = vec![ColumnView::from_nanos_timestamp(vec![time]), output];
+                if let Some(fields) = sample.optional_fields() {
+                    values.append(
+                        &mut fields
+                            .iter()
+                            .map(|f| ColumnView::from(f.to_owned()))
+                            .collect::<Vec<ColumnView>>(),
+                    )
+                }
 
-            let mut values = vec![
-                ColumnView::from_nanos_timestamp(vec![current_ts]),
-                ColumnView::from_nchar(vec![sample.data_path().as_path().to_str().unwrap()]),
-                output,
-            ];
-            if let Some(fields) = sample.optional_fields() {
-                values.append(
-                    &mut fields
-                        .iter()
-                        .map(|f| ColumnView::from(f.to_owned()))
-                        .collect::<Vec<ColumnView>>(),
-                )
+                values_to_bind.push(values);
+                time += Duration::from_nanos(1).as_nanos() as i64;
             }
 
-            stmt.bind(&values)?;
-            current_ts += Duration::from_nanos(1).as_nanos() as i64;
-        }
-        stmt.add_batch()?;
+            if let Some((mut batch_state, cvar)) = batch_state_cvar {
+                batch_state.remove(&metadata.batch);
+                cvar.notify_one();
+            }
+            values_to_bind
+        };
+        let field_placeholder = get_placeholders(values_to_bind.first().unwrap());
+        stmt.prepare(&format!(
+            "INSERT INTO ? USING inference TAGS ({}) VALUES ({})",
+            tag_placeholder, field_placeholder
+        ))
+        .await?;
 
-        stmt.execute()?;
+        stmt.set_tbname_tags(metadata.batch(), &tags).await?;
+        for values in values_to_bind {
+            stmt.bind(&values).await?;
+        }
+        stmt.add_batch().await?;
+        stmt.execute().await?;
         Ok(())
     }
 }
@@ -126,29 +148,43 @@ mod tests {
     use super::*;
     use crate::models::databases::{
         options::{CacheModel, ReplicaNum, SingleSTable},
-        DatabaseBuilder,
+        Database,
     };
-    use cml_core::{
-        core::inference::NewSampleBuilder, handler::Handler, metadata::MetaDataBuilder,
+    use anyhow::Ok;
+    use chrono::{Duration, NaiveDateTime};
+    use cml_core::{core::inference::NewSample, Metadata};
+    use std::{
+        collections::HashSet,
+        env, fs,
+        io::Write,
+        sync::{Arc, Condvar, Mutex},
     };
-    use std::fs;
-    use std::time::{Duration, SystemTime};
+    use tempfile::NamedTempFile;
 
     #[tokio::test]
     async fn test_inference_init() -> Result<()> {
-        let cml = TDengine::from_dsn("taos://");
+        let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
+        let available_status = vec!["SUCCESS".to_string()];
+        let cml = TDengine::new(
+            "taos://",
+            1,
+            1,
+            working_status,
+            available_status,
+            Duration::days(2),
+        );
         let taos = cml.build().await?;
 
         taos::AsyncQueryable::exec(&taos, "DROP DATABASE IF EXISTS inference").await?;
 
-        let db = DatabaseBuilder::default()
+        let db = Database::builder()
             .name("inference")
             .duration(1)
             .keep(90)
             .replica(ReplicaNum::NoReplica)
             .cache_model(CacheModel::None)
             .single_stable(SingleSTable::True)
-            .build()?;
+            .build();
 
         db.init(&cml.build().await?, None).await?;
 
@@ -170,8 +206,18 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_concurrent_inference() -> Result<()> {
-        let cml = TDengine::from_dsn("taos://");
-        let pool = cml.build_pool();
+        let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
+        let available_status = vec!["SUCCESS".to_string()];
+
+        let cml = Arc::new(TDengine::new(
+            "taos://",
+            1,
+            1,
+            working_status,
+            available_status,
+            Duration::days(2),
+        ));
+        let pool = Arc::new(cml.build_pool());
         let taos = pool.get().await?;
 
         taos.exec("DROP DATABASE IF EXISTS inference").await?;
@@ -185,7 +231,7 @@ mod tests {
             .await?;
         taos.exec(
             "CREATE STABLE IF NOT EXISTS inference.inference
-            (ts TIMESTAMP, data_path NCHAR(255), output FLOAT)
+            (ts TIMESTAMP, output FLOAT, data_path NCHAR(255))
             TAGS (model_update_time TIMESTAMP)",
         )
         .await?;
@@ -217,46 +263,41 @@ mod tests {
         )
         .await?;
 
-        let model_update_time = (SystemTime::now() - Duration::from_secs(86400))
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as i64;
-        let batch_meta_1: MetaData<Value> = MetaDataBuilder::default()
-            .model_update_time(model_update_time)
-            .batch("FUCK".to_owned())
-            .inherent_field_num(3)
-            .inherent_tag_num(1)
-            .optional_field_num(0)
-            .build()?;
-        let batch_meta_2: MetaData<Value> = MetaDataBuilder::default()
-            .model_update_time(model_update_time)
-            .batch("FUCK8".to_owned())
-            .inherent_field_num(3)
-            .inherent_tag_num(1)
-            .optional_field_num(0)
-            .build()?;
+        let batch_meta_1: Metadata<Value> = Metadata::builder().batch("FUCK".to_owned()).build();
+        let batch_meta_2 = Arc::new(Metadata::builder().batch("FUCK8".to_owned()).build());
+        let mut inference_file1 = NamedTempFile::new()?;
+        write!(inference_file1, "8.8")?;
+        let mut inference_file2 = NamedTempFile::new()?;
+        write!(inference_file2, "98.8")?;
 
-        fs::create_dir_all("/tmp/inference_dir/")?;
-        fs::write("/tmp/inference_dir/inference_data1.txt", b"8.8")?;
-        fs::write("/tmp/inference_dir/inference_data2.txt", b"98.8")?;
-        let mut batch_data_1 = vec![
-            NewSampleBuilder::default()
-                .data_path("/tmp/inference_dir/inference_data1.txt".into())
-                .build()?,
-            NewSampleBuilder::default()
-                .data_path("/tmp/inference_dir/inference_data2.txt".into())
-                .build()?,
+        let batch_data_1 = vec![
+            NewSample::builder()
+                .optional_fields(vec![Value::NChar(
+                    inference_file1.path().to_str().unwrap().to_owned(),
+                )])
+                .build(),
+            NewSample::builder()
+                .optional_fields(vec![Value::NChar(
+                    inference_file2.path().to_str().unwrap().to_owned(),
+                )])
+                .build(),
         ];
-        let mut batch_data_2 = vec![NewSampleBuilder::default()
-            .data_path("/tmp/inference_dir/inference_data1.txt".into())
-            .build()?];
-
-        let available_status = vec!["SUCCESS"];
+        let batch_data_2 = vec![NewSample::builder()
+            .optional_fields(vec![Value::NChar(
+                inference_file1.path().to_str().unwrap().to_owned(),
+            )])
+            .build()];
+        let batch_data_3 = vec![NewSample::builder()
+            .optional_fields(vec![Value::NChar(
+                inference_file2.path().to_str().unwrap().to_owned(),
+            )])
+            .build()];
+        let available_status_2 = ["SUCCESS".to_string()];
         let last_batch_time_1: i64 = taos
             .query_one(format!(
                 "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({}) ",
                 batch_meta_1.batch(),
-                available_status
+                available_status_2
                     .iter()
                     .map(|s| format!("'{}'", s))
                     .collect::<Vec<String>>()
@@ -268,7 +309,7 @@ mod tests {
             .query_one(format!(
                 "SELECT LAST(ts) FROM task.`{}` WHERE status IN ({}) ",
                 batch_meta_2.batch(),
-                available_status
+                available_status_2
                     .iter()
                     .map(|s| format!("'{}'", s))
                     .collect::<Vec<String>>()
@@ -276,77 +317,107 @@ mod tests {
             ))
             .await?
             .unwrap();
+        let working_dir = env::temp_dir().join("inference_dir");
+        fs::create_dir_all(&working_dir)?;
         fs::write(
-            "/tmp/inference_dir/".to_string()
-                + batch_meta_1.batch()
-                + &last_batch_time_1.to_string()
-                + ".txt",
+            working_dir
+                .join(batch_meta_1.batch().to_string() + &last_batch_time_1.to_string() + ".txt"),
             b"10",
         )?;
         fs::write(
-            "/tmp/inference_dir/".to_string()
-                + batch_meta_2.batch()
-                + &last_batch_time_2.to_string()
-                + ".txt",
+            working_dir
+                .join(batch_meta_2.batch().to_string() + &last_batch_time_2.to_string() + ".txt"),
             b"20",
         )?;
-        let inference_fn = |vec_data: &mut Vec<NewSample<Value>>,
-                            batch: &str,
-                            task_time: i64|
-         -> Vec<NewSample<Value>> {
-            let mut result: Vec<NewSample<Value>> = Vec::new();
-            let working_dir = "/tmp/inference_dir/".to_string();
-            let model_inference =
-                fs::read_to_string(working_dir + batch + &task_time.to_string() + ".txt")
-                    .unwrap()
-                    .parse::<f32>()
-                    .unwrap();
-            for inference_data in vec_data.iter() {
-                // inference
-                let inference_result = fs::read_to_string(inference_data.data_path())
-                    .unwrap()
-                    .parse::<f32>()
-                    .unwrap()
-                    + model_inference;
-                let output = if inference_result > 25.0 {
-                    Some(Value::Float(inference_result))
-                } else {
-                    None
-                };
-                result.push(
-                    NewSampleBuilder::default()
-                        .data_path(inference_data.data_path().to_path_buf())
-                        .output(output)
-                        .build()
+        let inference_fn = |vec_data: &mut [NewSample<Value>], batch: &str, task_time: i64| {
+            let working_dir = env::temp_dir().join("inference_dir/");
+            let model_inference = fs::read_to_string(
+                working_dir.join(batch.to_string() + &task_time.to_string() + ".txt"),
+            )
+            .unwrap()
+            .parse::<f32>()
+            .unwrap();
+            vec_data.iter_mut().for_each(|inference_data| {
+                let tmp = fs::read_to_string(
+                    inference_data
+                        .optional_fields()
+                        .as_ref()
+                        .unwrap()
+                        .first()
+                        .unwrap()
+                        .to_string()
                         .unwrap(),
-                );
-            }
-            result
+                )
+                .unwrap()
+                .parse::<f32>()
+                .unwrap()
+                    + model_inference;
+                inference_data.output = if tmp > 25.0 {
+                    Some(Value::Float(tmp))
+                } else {
+                    Some(Value::Null(Ty::Float))
+                };
+            });
         };
+        let batch_state = Arc::new((Mutex::new(HashSet::new()), Condvar::new()));
+        let cml_2 = cml.clone();
+        let batch_state_2 = batch_state.clone();
+        let pool_2 = pool.clone();
+        let cml_3 = cml.clone();
+        let batch_meta_2_dup = batch_meta_2.clone();
+        let batch_state_3 = batch_state.clone();
+        let pool_3 = pool.clone();
 
-        tokio::spawn({
+        let date_time = NaiveDateTime::parse_from_str("2018-08-18 18:18:18", "%Y-%m-%d %H:%M:%S")?;
+        let date_time_nanos = date_time.timestamp_nanos_opt().unwrap();
+
+        let task1 = tokio::spawn({
             async move {
                 cml.inference(
-                    batch_meta_1,
-                    &available_status,
-                    &mut batch_data_1,
+                    &batch_meta_1,
+                    batch_data_1,
+                    Some(date_time_nanos),
+                    Some(&batch_state),
                     &pool,
                     inference_fn,
                 )
                 .await
-                .unwrap();
-                cml.inference(
-                    batch_meta_2,
-                    &available_status,
-                    &mut batch_data_2,
-                    &pool,
-                    inference_fn,
-                )
-                .await
-                .unwrap();
+                .expect("Task 1 failed")
             }
-        })
-        .await?;
+        });
+        let task2 = tokio::spawn({
+            async move {
+                cml_2
+                    .inference(
+                        &batch_meta_2,
+                        batch_data_2,
+                        Some(date_time_nanos + 100),
+                        Some(&batch_state_2),
+                        &pool_2,
+                        inference_fn,
+                    )
+                    .await
+                    .expect("Task 2 failed")
+            }
+        });
+
+        let task3 = tokio::spawn({
+            async move {
+                cml_3
+                    .inference(
+                        &batch_meta_2_dup,
+                        batch_data_3,
+                        None,
+                        Some(&batch_state_3),
+                        &pool_3,
+                        inference_fn,
+                    )
+                    .await
+                    .expect("Task 3 failed")
+            }
+        });
+
+        let (_, _, _) = tokio::join!(task1, task2, task3);
 
         let mut result = taos
             .query("SELECT output FROM inference.inference ORDER BY output ASC")
@@ -356,12 +427,32 @@ mod tests {
             vec![
                 vec![Value::Null(Ty::Float)],
                 vec![Value::Float(28.8)],
-                vec![Value::Float(108.8)]
+                vec![Value::Float(108.8)],
+                vec![Value::Float(118.8)]
             ],
             records
         );
 
-        fs::remove_dir_all("/tmp/inference_dir/")?;
+        let mut time_result = taos
+            .query("SELECT ts FROM inference.inference ORDER BY ts ASC limit 3")
+            .await?;
+        let time_records = time_result.to_records().await?;
+        assert_eq!(
+            vec![
+                vec![Value::Timestamp(
+                    taos::taos_query::common::Timestamp::Nanoseconds(date_time_nanos)
+                )],
+                vec![Value::Timestamp(
+                    taos::taos_query::common::Timestamp::Nanoseconds(date_time_nanos + 1)
+                )],
+                vec![Value::Timestamp(
+                    taos::taos_query::common::Timestamp::Nanoseconds(date_time_nanos + 100)
+                )]
+            ],
+            time_records
+        );
+
+        fs::remove_dir_all(working_dir)?;
         taos.exec("DROP DATABASE IF EXISTS inference").await?;
         taos.exec("DROP DATABASE IF EXISTS task").await?;
         Ok(())

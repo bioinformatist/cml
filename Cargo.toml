@@ -8,9 +8,9 @@ resolver = "2"
 [workspace.dependencies]
 anyhow = "1"
 rand = "0.8.5"
-dashmap = { git = "https://github.com/xacrimon/dashmap.git", branch = "master", features = ["inline"] }
-derive_builder = "0.12.0"
-deadpool = { version = "0.9.5", default-features = false, features = ["managed"] }
+dashmap = { version = "5.5.0", features = ["inline"] }
 chrono = "0.4.26"
-burn = { git = "https://github.com/burn-rs/burn.git", branch = "main" }
+burn = "0.9.0"
 serde = { version = "1.0.163", features = ["derive"] }
+typed-builder = "0.16.2"
+derive-getters = "0.2.1"

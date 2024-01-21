@@ -1,132 +1,168 @@
 use crate::{models::stables::STable, TDengine};
 use anyhow::Result;
 use cml_core::{
-    core::register::{Register, SharedBatchState, TrainData},
-    handler::Handler,
-    metadata::MetaData,
+    core::register::{Register, TrainData},
+    get_placeholders, Handler, Metadata, SharedBatchState,
 };
 use rand::Rng;
+use std::future::Future;
 use std::time::{Duration, SystemTime};
 use taos::{taos_query::Manager, *};
 
-impl<D: IntoDsn + Clone> Register<Field, Value, Manager<TaosBuilder>> for TDengine<D> {
-    async fn init_register(
+impl<D: IntoDsn + Clone + Sync> Register<Field, Value, i64, Manager<TaosBuilder>> for TDengine<D> {
+    fn init_register(
         &self,
         gt_type: Field,
         optional_fields: Option<Vec<Field>>,
         optional_tags: Option<Vec<Field>>,
-    ) -> Result<()> {
+    ) -> impl Future<Output = Result<()>> + Send {
         let mut fields = vec![
             Field::new("ts", Ty::Timestamp, 8),
-            Field::new("is_train", Ty::Bool, 8),
-            Field::new("data_path", Ty::NChar, 255),
+            Field::new("is_train", Ty::Bool, 1),
             gt_type,
         ];
         if let Some(f) = optional_fields {
             fields.extend_from_slice(&f);
         }
 
-        let mut tags = vec![Field::new("model_update_time", Ty::Timestamp, 8)];
+        let mut tags = vec![Field::new("train_start_time", Ty::Timestamp, 8)];
         if let Some(t) = optional_tags {
             tags.extend_from_slice(&t);
         }
 
         let stable = STable::new("training_data", fields, tags);
-
-        let client = self.build().await?;
-        stable.init(&client, Some("training_data")).await?;
-
-        Ok(())
+        async {
+            let client = self.build().await?;
+            stable.init(&client, Some("training_data")).await?;
+            Ok(())
+        }
     }
 
     async fn register(
         &self,
-        metadata: MetaData<Value>,
+        metadata: &Metadata<Value>,
         train_data: Vec<TrainData<Value>>,
-        batch_state: SharedBatchState,
+        current_ts: Option<i64>,
+        batch_state: Option<&SharedBatchState>,
         pool: &Pool<TaosBuilder>,
     ) -> Result<()> {
         let taos = pool.get().await?;
         taos.use_database("training_data").await?;
-        let mut stmt = Stmt::init(&taos)?;
+        let mut stmt = Stmt::init(&taos).await?;
 
-        let (tag_placeholder, field_placeholder) = metadata.get_placeholders();
-
-        stmt.prepare(format!(
-            "INSERT INTO ? USING training_data TAGS ({}) VALUES ({})",
-            tag_placeholder, field_placeholder
-        ))?;
-
-        let mut tags = vec![Value::BigInt(*metadata.model_update_time())];
+        let mut tags = vec![Value::Null(Ty::Timestamp)];
         if let Some(t) = &metadata.optional_tags() {
             tags.extend_from_slice(t)
         };
-        stmt.set_tbname_tags(metadata.batch(), &tags)?;
+        let tag_placeholder = get_placeholders(&tags);
 
-        let batch_state = batch_state.lock().unwrap();
-        batch_state.map.insert(metadata.batch().to_owned(), true);
+        let values_to_bind = {
+            let batch_state_cvar = batch_state.map(|batch_state| {
+                let (lock, cvar) = &**batch_state;
+                let mut batch_state = lock.lock().unwrap();
+                while batch_state.contains(&metadata.batch) {
+                    batch_state = cvar.wait(batch_state).unwrap();
+                }
+                batch_state.insert(metadata.batch.clone());
+                (batch_state, cvar)
+            });
 
-        let mut rng = rand::thread_rng();
+            let mut rng = rand::thread_rng();
+            let mut time: i64 = if let Some(new_time) = current_ts {
+                new_time
+            } else {
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .expect("Clock may have gone backwards")
+                    .as_nanos() as i64
+            };
 
-        let mut current_ts = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("Clock may have gone backwards")
-            .as_nanos() as i64;
+            let mut values_to_bind = Vec::<Vec<ColumnView>>::new();
+            for data in &train_data {
+                let mut values = vec![
+                    ColumnView::from_nanos_timestamp(vec![time]),
+                    ColumnView::from_bools(vec![rng.gen::<f32>() >= 0.2]),
+                    ColumnView::from(data.gt().clone()),
+                ];
+                if let Some(fields) = data.optional_fields() {
+                    values.append(
+                        &mut fields
+                            .iter()
+                            .map(|f| ColumnView::from(f.to_owned()))
+                            .collect::<Vec<ColumnView>>(),
+                    )
+                }
 
-        for data in &train_data {
-            let mut values = vec![
-                ColumnView::from_nanos_timestamp(vec![current_ts]),
-                ColumnView::from_bools(vec![rng.gen::<f32>() >= 0.2]),
-                ColumnView::from_nchar(vec![data.data_path().as_path().to_str().unwrap()]),
-                ColumnView::from(data.gt().clone()),
-            ];
-            if let Some(fields) = data.optional_fields() {
-                values.append(
-                    &mut fields
-                        .iter()
-                        .map(|f| ColumnView::from(f.to_owned()))
-                        .collect::<Vec<ColumnView>>(),
-                )
+                values_to_bind.push(values);
+                time += Duration::from_nanos(1).as_nanos() as i64;
             }
 
-            stmt.bind(&values)?;
-            current_ts += Duration::from_nanos(1).as_nanos() as i64;
-        }
+            if let Some((mut batch_state, cvar)) = batch_state_cvar {
+                batch_state.remove(&metadata.batch);
+                cvar.notify_one();
+            }
 
-        stmt.add_batch()?;
-        stmt.execute()?;
+            values_to_bind
+        };
+
+        let field_placeholder = get_placeholders(values_to_bind.first().unwrap());
+
+        stmt.prepare(&format!(
+            "INSERT INTO ? USING training_data TAGS ({}) VALUES ({})",
+            tag_placeholder, field_placeholder
+        ))
+        .await?;
+
+        stmt.set_tbname_tags(metadata.batch(), &tags).await?;
+
+        for values in values_to_bind {
+            stmt.bind(&values).await?;
+        }
+        stmt.add_batch().await?;
+        stmt.execute().await?;
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::HashSet,
+        sync::{Arc, Condvar, Mutex},
+    };
+
     use super::*;
     use crate::models::databases::{
         options::{CacheModel, ReplicaNum, SingleSTable},
-        DatabaseBuilder,
+        Database,
     };
-    use cml_core::{
-        core::register::{BatchState, TrainDataBuilder},
-        handler::Handler,
-        metadata::MetaDataBuilder,
-    };
+    use chrono::{Duration, NaiveDateTime};
+    use cml_core::{core::register::TrainData, Metadata};
 
     #[tokio::test]
     async fn test_register_init() -> Result<()> {
-        let cml = TDengine::from_dsn("taos://");
+        let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
+        let available_status = vec!["SUCCESS".to_string()];
+        let cml = TDengine::new(
+            "taos://",
+            1,
+            1,
+            working_status,
+            available_status,
+            Duration::days(2),
+        );
         let taos = cml.build().await?;
 
         taos::AsyncQueryable::exec(&taos, "DROP DATABASE IF EXISTS training_data").await?;
 
-        let db = DatabaseBuilder::default()
+        let db = Database::builder()
             .name("training_data")
             .duration(1)
             .keep(90)
             .replica(ReplicaNum::NoReplica)
             .cache_model(CacheModel::None)
             .single_stable(SingleSTable::True)
-            .build()?;
+            .build();
         db.init(&cml.build().await?, None).await?;
 
         cml.init_register(
@@ -154,10 +190,19 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn test_concurrent_register() -> Result<()> {
-        let cml = TDengine::from_dsn("taos://");
-        let pool = cml.build_pool();
+        let working_status = vec!["TRAIN".to_string(), "EVAL".to_string()];
+        let available_status = vec!["SUCCESS".to_string()];
+        let cml = Arc::new(TDengine::new(
+            "taos://",
+            1,
+            1,
+            working_status,
+            available_status,
+            Duration::days(2),
+        ));
+        let pool = Arc::new(cml.build_pool());
         let taos = pool.get().await?;
 
         taos.exec("DROP DATABASE IF EXISTS training_data").await?;
@@ -168,88 +213,70 @@ mod tests {
         .await?;
         taos.exec(
             "CREATE STABLE IF NOT EXISTS training_data.training_data
-            (ts TIMESTAMP, is_train BOOL, data_path NCHAR(255), gt FLOAT, fucking_field_1 BINARY(255), fucking_field_2 TINYINT)
+            (ts TIMESTAMP, is_train BOOL, gt FLOAT, fucking_field_1 BINARY(255), fucking_field_2 TINYINT)
             TAGS (model_update_time TIMESTAMP, fucking_tag_1 BINARY(255), fucking_tag_2 TINYINT)"
         ).await?;
 
-        let batch_state = BatchState::create(2);
+        let batch_state = Arc::new((Mutex::new(HashSet::new()), Condvar::new()));
 
-        let model_update_time = (SystemTime::now() - Duration::from_secs(86400))
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as i64;
+        let metadata = Arc::new(
+            Metadata::builder()
+                .batch("Fuck_1".to_owned())
+                .optional_tags(vec![
+                    Value::VarChar("fuck_1".to_string()),
+                    Value::TinyInt(8),
+                ])
+                .build(),
+        );
 
-        let batch_meta_1 = MetaDataBuilder::default()
-            .model_update_time(model_update_time)
-            .batch("Fuck_1".to_owned())
-            .inherent_field_num(4)
-            .inherent_tag_num(1)
-            .optional_field_num(2)
-            .optional_tags(Some(vec![
-                Value::VarChar("fuck_1".to_string()),
-                Value::TinyInt(8),
-            ]))
-            .build()?;
-
-        let batch_meta_2 = MetaDataBuilder::default()
-            .model_update_time(model_update_time)
-            .batch("Fuck_2".to_owned())
-            .inherent_field_num(4)
-            .inherent_tag_num(1)
-            .optional_field_num(2)
-            .optional_tags(Some(vec![
-                Value::VarChar("fuck_2".to_string()),
-                Value::TinyInt(8),
-            ]))
-            .build()?;
-
-        let batch_data_1 = vec![
-            TrainDataBuilder::default()
-                .data_path("/fuck/your/data_1".into())
+        let data_1 = vec![
+            TrainData::builder()
                 .gt(Value::Float(51.8))
-                .optional_fields(Some(vec![
-                    Value::VarChar("fuck".to_string()),
-                    Value::TinyInt(18),
-                ]))
-                .build()?,
-            TrainDataBuilder::default()
-                .data_path("/fuck/your/data_1".into())
+                .optional_fields(vec![Value::VarChar("fuck".to_string()), Value::TinyInt(18)])
+                .build(),
+            TrainData::builder()
                 .gt(Value::Float(1.8))
-                .optional_fields(Some(vec![
-                    Value::VarChar("fuck".to_string()),
-                    Value::TinyInt(18),
-                ]))
-                .build()?,
+                .optional_fields(vec![Value::VarChar("fuck".to_string()), Value::TinyInt(18)])
+                .build(),
         ];
 
-        let batch_data_2 = vec![
-            TrainDataBuilder::default()
-                .data_path("/fuck/your/data_2".into())
+        let data_2 = vec![
+            TrainData::builder()
                 .gt(Value::Float(51.8))
-                .optional_fields(Some(vec![
-                    Value::VarChar("fuck".to_string()),
-                    Value::TinyInt(18),
-                ]))
-                .build()?,
-            TrainDataBuilder::default()
-                .data_path("/fuck/your/data_2".into())
+                .optional_fields(vec![Value::VarChar("fuck".to_string()), Value::TinyInt(18)])
+                .build(),
+            TrainData::builder()
                 .gt(Value::Float(1.8))
-                .optional_fields(Some(vec![
-                    Value::VarChar("fuck".to_string()),
-                    Value::TinyInt(18),
-                ]))
-                .build()?,
+                .optional_fields(vec![Value::VarChar("fuck".to_string()), Value::TinyInt(18)])
+                .build(),
         ];
 
-        tokio::spawn(async move {
-            cml.register(batch_meta_1, batch_data_1, batch_state.clone(), &pool)
+        let another_cml = cml.clone();
+        let another_metadata = metadata.clone();
+        let another_batch_state = batch_state.clone();
+        let another_pool = pool.clone();
+        let date_time = NaiveDateTime::parse_from_str("2018-08-18 18:18:18", "%Y-%m-%d %H:%M:%S")?;
+        let date_time_nanos = date_time.timestamp_nanos_opt().unwrap();
+
+        let task1 = tokio::spawn(async move {
+            cml.register(&metadata, data_1, None, None, &pool)
                 .await
-                .unwrap();
-            cml.register(batch_meta_2, batch_data_2, batch_state.clone(), &pool)
+                .expect("Task 1 failed")
+        });
+        let task2 = tokio::spawn(async move {
+            another_cml
+                .register(
+                    &another_metadata,
+                    data_2,
+                    Some(date_time_nanos),
+                    Some(&another_batch_state),
+                    &another_pool,
+                )
                 .await
-                .unwrap();
-        })
-        .await?;
+                .expect("Task 2 failed")
+        });
+
+        let (_, _) = tokio::join!(task1, task2);
 
         let records = taos
             .query_one("SELECT COUNT(*) FROM training_data.training_data")
@@ -257,6 +284,21 @@ mod tests {
             .unwrap_or(0);
         assert_eq!(4, records);
 
+        let mut time_result = taos
+            .query("SELECT ts FROM training_data.training_data ORDER BY ts ASC limit 2")
+            .await?;
+        let time_records = time_result.to_records().await?;
+        assert_eq!(
+            vec![
+                vec![Value::Timestamp(
+                    taos::taos_query::common::Timestamp::Nanoseconds(date_time_nanos)
+                )],
+                vec![Value::Timestamp(
+                    taos::taos_query::common::Timestamp::Nanoseconds(date_time_nanos + 1)
+                )]
+            ],
+            time_records
+        );
         taos.exec("DROP DATABASE IF EXISTS training_data").await?;
         Ok(())
     }
